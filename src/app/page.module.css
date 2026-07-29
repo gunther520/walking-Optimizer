@@ -1,0 +1,284 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: 0 20px 60px rgba(40, 78, 155, 0.08);
+}
+
+.eyebrow {
+  margin-bottom: 10px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hero h1 {
+  max-width: 740px;
+  font-size: 42px;
+  line-height: 1.05;
+}
+
+.subtitle {
+  max-width: 760px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.callout {
+  min-width: 280px;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  background: #f8fbff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card,
+.placeholderCard {
+  padding: 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+}
+
+.placeholderCard {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.card h2 {
+  margin-bottom: 10px;
+  font-size: 20px;
+}
+
+.cardText {
+  margin-bottom: 16px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.field span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field input,
+.field select {
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.twoUp {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.primaryButton {
+  width: 100%;
+  height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primaryButton:hover {
+  background: var(--primary-dark);
+}
+
+.primaryButton:disabled {
+  cursor: wait;
+  opacity: 0.8;
+}
+
+.steps {
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.metricList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.metricList div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.metricList span,
+.statCard span,
+.segmentRow span,
+.instructions li {
+  color: var(--muted);
+}
+
+.recommendation {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #eef6ff;
+  color: #18406d;
+  line-height: 1.5;
+}
+
+.errorBox {
+  padding: 14px 16px;
+  border: 1px solid #fecaca;
+  border-radius: 16px;
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.mapPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mapFrame {
+  height: 560px;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+}
+
+.bottomPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.statCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+}
+
+.segmentTable {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.segmentRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e8eef7;
+}
+
+.instructions {
+  margin-top: 18px;
+}
+
+.instructions h3 {
+  margin-bottom: 10px;
+}
+
+.instructions ul {
+  padding-left: 18px;
+  line-height: 1.8;
+}
+
+@media (max-width: 1180px) {
+  .hero,
+  .grid {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .callout {
+    max-width: none;
+  }
+}
+
+@media (max-width: 780px) {
+  .page {
+    padding: 16px;
+  }
+
+  .hero {
+    padding: 20px;
+  }
+
+  .hero h1 {
+    font-size: 32px;
+  }
+
+  .twoUp,
+  .statsGrid,
+  .metricList,
+  .segmentRow {
+    grid-template-columns: 1fr;
+  }
+
+  .mapFrame {
+    height: 420px;
+  }
+}
