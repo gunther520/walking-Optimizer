@@ -48,3 +48,8 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+.hazard-icon {
+  background: transparent !important;
+  border: none !important;
+}

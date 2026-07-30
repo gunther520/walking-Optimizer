@@ -51,6 +51,7 @@ export function WorkoutPlanner() {
   const [error, setError] = useState<string | null>(null);
   const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
+  const [mapLocked, setMapLocked] = useState(false);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
 
   useEffect(() => {
@@ -100,12 +101,18 @@ export function WorkoutPlanner() {
         );
 
         const delta = speedMps - target.targetSpeedMps;
+        const roleHint =
+          target.paceRole === "push"
+            ? "Push interval — pick up the pace for cardio."
+            : target.paceRole === "rest"
+              ? "Recovery interval — ease off and breathe."
+              : "Steady interval — hold a strong walking effort.";
         const recommendation =
-          delta > 0.12
-            ? "Ease off slightly on this segment."
-            : delta < -0.12
-              ? "Push a bit faster to stay aerobic."
-              : "You are close to the planned aerobic pace.";
+          delta > 0.15
+            ? `${roleHint} You are a bit fast right now.`
+            : delta < -0.15
+              ? `${roleHint} You are a bit slow right now.`
+              : roleHint;
 
         setLiveStats({
           speedMps: speedMps || target.targetSpeedMps,
@@ -153,18 +160,47 @@ export function WorkoutPlanner() {
   }, [routePlan]);
 
   function handleMapPick(point: LatLng) {
+    if (mapLocked) return;
     setError(null);
 
+    // Starting a new pick sequence: keep the existing route visible until a
+    // successful rebuild, so a misclick doesn't wipe the path.
     if (!start || (start && end)) {
       setStart(point);
       setEnd(null);
-      setRoutePlan(null);
       setLiveStats(null);
       return;
     }
 
     setEnd(point);
   }
+
+  function handleClearPoints() {
+    setStart(null);
+    setEnd(null);
+    setRoutePlan(null);
+    setLiveStats(null);
+    setError(null);
+    setMapLocked(false);
+    lastFixRef.current = null;
+  }
+
+  function handleEditRoutePoints() {
+    setMapLocked(false);
+    setError(null);
+  }
+
+  const pickHint = mapLocked
+    ? "Map locked on the route. Press “Change start & end” to edit points."
+    : !start
+      ? "Click the map to set a start point."
+      : !end
+        ? routePlan
+          ? "Existing route kept. Click the map to set a new end point, then rebuild."
+          : "Click the map to set an end point."
+        : routePlan
+          ? "Start and end set. Rebuild to update the locked route view."
+          : "Start and end set. Build the walking plan.";
 
   async function handleBuildRoute() {
     if (!start || !end) {
@@ -195,6 +231,7 @@ export function WorkoutPlanner() {
 
       setRoutePlan(result as RoutePlan);
       setLiveStats(null);
+      setMapLocked(true);
       lastFixRef.current = null;
     } catch (requestError) {
       setError(
@@ -314,6 +351,23 @@ export function WorkoutPlanner() {
             <button className={styles.primaryButton} onClick={handleBuildRoute} disabled={loading}>
               {loading ? "Building route..." : "Build aerobic walking plan"}
             </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleEditRoutePoints}
+              disabled={loading || !mapLocked}
+              type="button"
+            >
+              Change start & end
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleClearPoints}
+              disabled={loading || (!start && !end && !routePlan)}
+              type="button"
+            >
+              Clear points & route
+            </button>
+            <p className={styles.pickHint}>{pickHint}</p>
           </div>
 
           <div className={styles.card}>
@@ -321,9 +375,50 @@ export function WorkoutPlanner() {
             <ol className={styles.steps}>
               <li>Click the map once to set a start point.</li>
               <li>Click a second time to set the destination.</li>
-              <li>Build the route to calculate segment pace changes.</li>
+              <li>Build the route — the map locks and focuses on the path.</li>
+              <li>Press “Change start & end” to unlock and pick new points.</li>
               <li>Allow geolocation to see live pace guidance.</li>
             </ol>
+          </div>
+
+          <div className={styles.card}>
+            <h2>On-path markers</h2>
+            <p className={styles.cardText}>
+              Only features the walking path actually uses are shown. Car junction
+              lights and nearby side stairs are ignored.
+            </p>
+            <ul className={styles.legendList}>
+              <li>
+                <span className={styles.legendStar} aria-hidden>
+                  ★
+                </span>
+                Stairs on the walked path
+              </li>
+              <li>
+                <span className={styles.legendTriangle} aria-hidden />
+                Elevator / lift on path
+              </li>
+              <li>
+                <span className={styles.legendRect} aria-hidden />
+                Pedestrian crossing signal
+              </li>
+            </ul>
+            {routePlan ? (
+              <p className={styles.cardText}>
+                Detected on this route: {routePlan.hazards.length}
+                {routePlan.hazardDebug
+                  ? ` (GraphHopper ${routePlan.hazardDebug.graphHopperCount}, OSM on-path ${routePlan.hazardDebug.osmOnPathCount}${
+                      routePlan.hazardDebug.overpassOk
+                        ? ""
+                        : `, Overpass failed${
+                            routePlan.hazardDebug.overpassError
+                              ? `: ${routePlan.hazardDebug.overpassError}`
+                              : ""
+                          }`
+                    })`
+                  : ""}
+              </p>
+            ) : null}
           </div>
 
           {liveStats ? (
@@ -355,14 +450,20 @@ export function WorkoutPlanner() {
         </aside>
 
         <section className={styles.mapPanel}>
-          <div className={styles.mapFrame}>
+          <div className={`${styles.mapFrame} ${mapLocked ? styles.mapFrameLocked : ""}`}>
             <LeafletMap
               start={start}
               end={end}
               routePoints={routePlan?.points ?? []}
+              segmentSpeedPlan={routePlan?.speedPlan ?? null}
+              hazards={routePlan?.hazards ?? []}
               currentPosition={currentPosition}
               onPickPoint={handleMapPick}
+              locked={mapLocked}
             />
+            {mapLocked ? (
+              <div className={styles.mapLockBadge}>Route locked</div>
+            ) : null}
           </div>
 
           <div className={styles.bottomPanel}>
@@ -378,15 +479,48 @@ export function WorkoutPlanner() {
             {routePlan ? (
               <div className={styles.card}>
                 <h2>Segment pacing preview</h2>
+                <p className={styles.cardText}>
+                  Route edges are split into ~12 m steps so each pair stays near
+                  90s push (75%) + 30s recovery (25%). Zone 2 is max on Push only.
+                </p>
                 <div className={styles.segmentTable}>
-                  {routePlan.speedPlan.slice(0, 8).map((segment) => {
-                    const terrain = routePlan.segments[segment.segmentIndex];
+                  <div className={`${styles.segmentRow} ${styles.segmentHeader}`}>
+                    <span>Interval</span>
+                    <span>Zone</span>
+                    <span>Distance / time</span>
+                    <span>Target HR / pace</span>
+                  </div>
+                  {(routePlan.paceBlocks?.length
+                    ? routePlan.paceBlocks
+                    : []
+                  ).map((block) => {
+                    const roleLabel =
+                      block.paceRole === "push"
+                        ? "Push"
+                        : block.paceRole === "rest"
+                          ? "Rest"
+                          : "Steady";
+                    const roleClass =
+                      block.paceRole === "push"
+                        ? styles.rolePush
+                        : block.paceRole === "rest"
+                          ? styles.roleRest
+                          : styles.roleSteady;
+
                     return (
-                      <div key={segment.segmentIndex} className={styles.segmentRow}>
-                        <span>Seg {segment.segmentIndex + 1}</span>
-                        <span>{segment.targetSpeedMps.toFixed(2)} m/s</span>
-                        <span>{(terrain.grade * 100).toFixed(1)}% grade</span>
-                        <span>{segment.estimatedHr} bpm est.</span>
+                      <div key={block.index} className={styles.segmentRow}>
+                        <span>#{block.index + 1}</span>
+                        <span className={roleClass}>
+                          {roleLabel} · {block.zoneLabel ?? ""}
+                        </span>
+                        <span>
+                          {formatDistance(block.distanceMeters)} /{" "}
+                          {formatDuration(block.durationSeconds)}
+                        </span>
+                        <span>
+                          ~{block.targetHr ?? block.avgHr} bpm ·{" "}
+                          {block.avgSpeedMps.toFixed(2)} m/s
+                        </span>
                       </div>
                     );
                   })}

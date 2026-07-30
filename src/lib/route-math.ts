@@ -37,7 +37,112 @@ export function buildSegments(points: LatLng[]): RouteSegment[] {
   });
 }
 
-export function getNearestSegmentIndex(
+/**
+ * Insert interpolated points so no edge is longer than maxStepMeters.
+ * Needed so push/recovery time targets (~90s / ~30s) are not blown by huge GraphHopper edges.
+ */
+export function densifyRoutePoints(
+  points: LatLng[],
+  maxStepMeters = 12,
+): LatLng[] {
+  if (points.length < 2) return points;
+
+  const densified: LatLng[] = [points[0]];
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const start = points[i];
+    const end = points[i + 1];
+    const distance = haversineDistance(start, end);
+
+    if (distance <= maxStepMeters) {
+      densified.push(end);
+      continue;
+    }
+
+    const steps = Math.ceil(distance / maxStepMeters);
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      densified.push({
+        lat: start.lat + (end.lat - start.lat) * t,
+        lng: start.lng + (end.lng - start.lng) * t,
+        ele:
+          start.ele != null && end.ele != null
+            ? start.ele + (end.ele - start.ele) * t
+            : end.ele ?? start.ele,
+      });
+    }
+  }
+
+  return densified;
+}
+
+export function projectPointOntoSegment(point: LatLng, start: LatLng, end: LatLng) {
+  const startLat = toRadians(start.lat);
+  const startLng = toRadians(start.lng);
+  const endLat = toRadians(end.lat);
+  const endLng = toRadians(end.lng);
+  const pointLat = toRadians(point.lat);
+  const pointLng = toRadians(point.lng);
+
+  // Local flat approximation is enough for short walking segments.
+  const x = (endLng - startLng) * Math.cos((startLat + endLat) / 2);
+  const y = endLat - startLat;
+  const dx = (pointLng - startLng) * Math.cos((startLat + endLat) / 2);
+  const dy = pointLat - startLat;
+  const lengthSq = x * x + y * y;
+
+  if (lengthSq <= 0) {
+    return { lat: start.lat, lng: start.lng, t: 0 };
+  }
+
+  const t = Math.max(0, Math.min(1, (dx * x + dy * y) / lengthSq));
+  return {
+    lat: start.lat + (end.lat - start.lat) * t,
+    lng: start.lng + (end.lng - start.lng) * t,
+    t,
+  };
+}
+
+export function distanceToRouteSegment(point: LatLng, segment: RouteSegment) {
+  const projected = projectPointOntoSegment(point, segment.start, segment.end);
+  return haversineDistance(point, projected);
+}
+
+/** Minimum distance between two polylines (meters). */
+export function minDistanceBetweenPolylines(
+  a: LatLng[],
+  b: LatLng[],
+) {
+  if (a.length < 2 || b.length < 2) return Number.POSITIVE_INFINITY;
+
+  let best = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < a.length - 1; i += 1) {
+    for (let j = 0; j < b.length - 1; j += 1) {
+      const d1 = distanceToRouteSegment(a[i], {
+        index: j,
+        start: b[j],
+        end: b[j + 1],
+        distanceMeters: 0,
+        grade: 0,
+        elevationDelta: 0,
+      });
+      const d2 = distanceToRouteSegment(b[j], {
+        index: i,
+        start: a[i],
+        end: a[i + 1],
+        distanceMeters: 0,
+        grade: 0,
+        elevationDelta: 0,
+      });
+      best = Math.min(best, d1, d2);
+    }
+  }
+
+  return best;
+}
+
+export function getNearestSegmentMatch(
   position: LatLng,
   segments: RouteSegment[],
 ) {
@@ -45,20 +150,28 @@ export function getNearestSegmentIndex(
   let nearestDistance = Number.POSITIVE_INFINITY;
 
   for (const segment of segments) {
-    const midpoint = {
-      lat: (segment.start.lat + segment.end.lat) / 2,
-      lng: (segment.start.lng + segment.end.lng) / 2,
-    };
-
-    const distance = haversineDistance(position, midpoint);
+    const distance = distanceToRouteSegment(position, segment);
     if (distance < nearestDistance) {
       nearestDistance = distance;
       nearestIndex = segment.index;
     }
   }
 
-  return nearestIndex;
+  return { segmentIndex: nearestIndex, distanceMeters: nearestDistance };
 }
+
+export function getNearestSegmentIndex(
+  position: LatLng,
+  segments: RouteSegment[],
+) {
+  return getNearestSegmentMatch(position, segments).segmentIndex;
+}
+
+/**
+ * Strict on-path threshold for pedestrian-relevant OSM features.
+ * GraphHopper road_class=steps is treated as on-path without this buffer.
+ */
+export const ON_PATH_MAX_METERS = 8;
 
 export function formatDistance(distanceMeters: number) {
   if (distanceMeters >= 1000) {

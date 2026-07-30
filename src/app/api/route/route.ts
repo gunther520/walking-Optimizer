@@ -3,6 +3,11 @@ import { NextResponse } from "next/server";
 import { fetchWalkingRoute } from "@/lib/graphhopper";
 import { buildRoutePlan } from "@/lib/optimizer";
 import { getDefaultSpeedBounds } from "@/lib/training";
+import {
+  dedupeHazards,
+  filterHazardsOnPath,
+  findOSMHazardsAlongRoute,
+} from "@/lib/osm-hazards";
 import type { WorkoutLevel, WorkoutProfile } from "@/types/workout";
 
 type RouteRequestBody = {
@@ -40,14 +45,31 @@ export async function POST(request: Request) {
     }
 
     const route = await fetchWalkingRoute(body.start, body.end);
+    const osm = await findOSMHazardsAlongRoute(route.points, route.segments);
+
+    const hazards = filterHazardsOnPath(
+      dedupeHazards([...route.routeHazards, ...osm.hazards]),
+      route.segments,
+    );
+
     const plan = buildRoutePlan(
       route.points,
       route.segments,
       route.instructions,
       profile,
+      hazards,
     );
 
-    return NextResponse.json(plan);
+    return NextResponse.json({
+      ...plan,
+      hazardDebug: {
+        graphHopperCount: route.routeHazards.length,
+        osmRawCount: osm.debug.rawOsmCount,
+        osmOnPathCount: osm.debug.onPathOsmCount,
+        overpassOk: osm.debug.overpassOk,
+        overpassError: osm.debug.overpassError,
+      },
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unexpected route planning error.";

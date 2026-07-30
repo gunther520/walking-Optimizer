@@ -1,19 +1,45 @@
-import type { WorkoutLevel, WorkoutProfile, ZoneBand } from "@/types/workout";
+import type { PaceRole, WorkoutLevel, WorkoutProfile, ZoneBand } from "@/types/workout";
 
-const ZONE_RANGES: Record<WorkoutLevel, { minFraction: number; maxFraction: number; vo2max: number }> = {
-  beginner: { minFraction: 0.6, maxFraction: 0.7, vo2max: 26 },
-  intermediate: { minFraction: 0.65, maxFraction: 0.8, vo2max: 34 },
-  advanced: { minFraction: 0.75, maxFraction: 0.85, vo2max: 42 },
+/**
+ * Classic Karvonen HR zones for interval walking.
+ * Zone 2 is the ceiling — it is only targeted on Push.
+ * Rest = Z1, Steady = low Z2, Push = upper Z2.
+ */
+const ROLE_HRR: Record<
+  WorkoutLevel,
+  Record<PaceRole, { low: number; high: number }>
+> = {
+  beginner: {
+    rest: { low: 0.5, high: 0.58 },
+    steady: { low: 0.58, high: 0.65 },
+    push: { low: 0.65, high: 0.72 },
+  },
+  intermediate: {
+    rest: { low: 0.5, high: 0.6 },
+    steady: { low: 0.6, high: 0.66 },
+    push: { low: 0.66, high: 0.75 },
+  },
+  advanced: {
+    rest: { low: 0.5, high: 0.6 },
+    steady: { low: 0.6, high: 0.68 },
+    push: { low: 0.68, high: 0.78 },
+  },
+};
+
+const ZONE_VO2MAX: Record<WorkoutLevel, number> = {
+  beginner: 28,
+  intermediate: 36,
+  advanced: 44,
 };
 
 export function getDefaultSpeedBounds(level: WorkoutLevel) {
   switch (level) {
     case "beginner":
-      return { minSpeedMps: 0.9, maxSpeedMps: 1.45 };
+      return { minSpeedMps: 0.85, maxSpeedMps: 1.7 };
     case "intermediate":
-      return { minSpeedMps: 1.0, maxSpeedMps: 1.75 };
+      return { minSpeedMps: 0.95, maxSpeedMps: 2.0 };
     case "advanced":
-      return { minSpeedMps: 1.1, maxSpeedMps: 2.0 };
+      return { minSpeedMps: 1.05, maxSpeedMps: 2.25 };
   }
 }
 
@@ -21,17 +47,43 @@ export function estimateHrMax(age: number) {
   return 220 - age;
 }
 
+export function getRoleHrr(level: WorkoutLevel, role: PaceRole) {
+  return ROLE_HRR[level][role];
+}
+
+/** Midpoint intensity inside the role's HR zone. */
+export function intensityForRole(role: PaceRole, profile: WorkoutProfile) {
+  const band = getRoleHrr(profile.workoutLevel, role);
+  return (band.low + band.high) / 2;
+}
+
+export function targetHrForRole(role: PaceRole, profile: WorkoutProfile) {
+  const hrMax = estimateHrMax(profile.age);
+  const intensity = intensityForRole(role, profile);
+  return Math.round(
+    profile.restingHr + (hrMax - profile.restingHr) * intensity,
+  );
+}
+
+export function zoneLabelForRole(role: PaceRole) {
+  if (role === "rest") return "Zone 1";
+  if (role === "steady") return "low Zone 2";
+  return "Zone 2";
+}
+
+/** Overall UI band: Zone 1–2 (Zone 2 is the max). */
 export function getZoneBand(profile: WorkoutProfile): ZoneBand {
-  const range = ZONE_RANGES[profile.workoutLevel];
+  const rest = getRoleHrr(profile.workoutLevel, "rest");
+  const push = getRoleHrr(profile.workoutLevel, "push");
   const hrMax = estimateHrMax(profile.age);
   const minHr =
-    profile.restingHr + (hrMax - profile.restingHr) * range.minFraction;
+    profile.restingHr + (hrMax - profile.restingHr) * rest.low;
   const maxHr =
-    profile.restingHr + (hrMax - profile.restingHr) * range.maxFraction;
+    profile.restingHr + (hrMax - profile.restingHr) * push.high;
 
   return {
-    minFraction: range.minFraction,
-    maxFraction: range.maxFraction,
+    minFraction: rest.low,
+    maxFraction: push.high,
     minHr: Math.round(minHr),
     maxHr: Math.round(maxHr),
     hrMax,
@@ -39,12 +91,16 @@ export function getZoneBand(profile: WorkoutProfile): ZoneBand {
 }
 
 export function estimateVo2Max(profile: WorkoutProfile) {
-  return ZONE_RANGES[profile.workoutLevel].vo2max;
+  return ZONE_VO2MAX[profile.workoutLevel];
 }
 
 export function vo2FromSpeedAndGrade(speedMps: number, grade: number) {
   const metersPerMinute = speedMps * 60;
-  return 0.1 * metersPerMinute + 1.8 * metersPerMinute * grade + 3.5;
+  return (
+    0.1 * metersPerMinute +
+    1.8 * metersPerMinute * Math.max(0, grade) +
+    3.5
+  );
 }
 
 export function metsFromVo2(vo2: number) {
@@ -64,10 +120,10 @@ export function estimateHrFromVo2(profile: WorkoutProfile, vo2: number) {
 export function getWorkoutCopy(level: WorkoutLevel) {
   switch (level) {
     case "beginner":
-      return "Comfortable aerobic build";
+      return "HR intervals up to Zone 2 on push";
     case "intermediate":
-      return "Steady cardio conditioning";
+      return "Zone 2 push / low Zone 2 steady / Zone 1 rest";
     case "advanced":
-      return "Strong brisk-walk interval feel";
+      return "Upper Zone 2 push with Zone 1 recovery";
   }
 }
