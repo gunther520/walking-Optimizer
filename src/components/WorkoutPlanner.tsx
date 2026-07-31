@@ -3,6 +3,8 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { WalkHud } from "@/components/WalkHud";
+import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import { formatDistance, formatDuration, getNearestSegmentIndex, haversineDistance } from "@/lib/route-math";
 import { estimateHrFromVo2, getDefaultSpeedBounds, getWorkoutCopy, metsFromVo2, vo2FromSpeedAndGrade } from "@/lib/training";
 import type { LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
@@ -446,6 +448,13 @@ export function WorkoutPlanner() {
             </div>
           ) : null}
 
+          {routePlan ? (
+            <WalkHud
+              routePlan={routePlan}
+              liveSegmentIndex={liveStats?.segmentIndex ?? null}
+            />
+          ) : null}
+
           {error ? <div className={styles.errorBox}>{error}</div> : null}
         </aside>
 
@@ -483,8 +492,23 @@ export function WorkoutPlanner() {
                   Route edges are split into ~12 m steps so each pair stays near
                   180s push (75%) + 60s recovery (25%). Zone 2 is max on Push
                   only. Longer routes ease target bpm so average effort stays
-                  sustainable.
+                  sustainable. Pace roles also use line patterns: push solid,
+                  steady dashed, rest dotted.
                 </p>
+                <ul className={styles.paceLegend}>
+                  <li>
+                    <span className={`${styles.paceSwatch} ${styles.paceSwatchPush}`} />
+                    Push · solid
+                  </li>
+                  <li>
+                    <span className={`${styles.paceSwatch} ${styles.paceSwatchSteady}`} />
+                    Steady · dashed
+                  </li>
+                  <li>
+                    <span className={`${styles.paceSwatch} ${styles.paceSwatchRest}`} />
+                    Rest · dotted
+                  </li>
+                </ul>
                 <div className={styles.segmentTable}>
                   <div className={`${styles.segmentRow} ${styles.segmentHeader}`}>
                     <span>Interval</span>
@@ -496,12 +520,7 @@ export function WorkoutPlanner() {
                     ? routePlan.paceBlocks
                     : []
                   ).map((block) => {
-                    const roleLabel =
-                      block.paceRole === "push"
-                        ? "Push"
-                        : block.paceRole === "rest"
-                          ? "Rest"
-                          : "Steady";
+                    const roleLabel = `${paceRoleLabel(block.paceRole)} · ${pacePatternName(block.paceRole)}`;
                     const roleClass =
                       block.paceRole === "push"
                         ? styles.rolePush

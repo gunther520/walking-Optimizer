@@ -45,7 +45,25 @@ export async function POST(request: Request) {
     }
 
     const route = await fetchWalkingRoute(body.start, body.end);
-    const osm = await findOSMHazardsAlongRoute(route.points, route.segments);
+
+    // Never block the walk plan on Overpass — GraphHopper hazards alone are enough.
+    const osmTimedOut = {
+      hazards: [] as Awaited<
+        ReturnType<typeof findOSMHazardsAlongRoute>
+      >["hazards"],
+      debug: {
+        overpassOk: false,
+        overpassError: "Overpass timed out; using GraphHopper hazards only.",
+        rawOsmCount: 0,
+        onPathOsmCount: 0,
+      },
+    };
+    const osm = await Promise.race([
+      findOSMHazardsAlongRoute(route.points, route.segments),
+      new Promise<typeof osmTimedOut>((resolve) => {
+        setTimeout(() => resolve(osmTimedOut), 7000);
+      }),
+    ]);
 
     const hazards = filterHazardsOnPath(
       dedupeHazards([...route.routeHazards, ...osm.hazards]),
@@ -60,8 +78,17 @@ export async function POST(request: Request) {
       hazards,
     );
 
+    const degradedNote = osm.debug.overpassOk
+      ? []
+      : [
+          `OSM hazard lookup degraded${
+            osm.debug.overpassError ? `: ${osm.debug.overpassError}` : ""
+          }. Plan still built with GraphHopper on-path stairs.`,
+        ];
+
     return NextResponse.json({
       ...plan,
+      instructionSummary: [...degradedNote, ...plan.instructionSummary],
       hazardDebug: {
         graphHopperCount: route.routeHazards.length,
         osmRawCount: osm.debug.rawOsmCount,

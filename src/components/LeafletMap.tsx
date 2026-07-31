@@ -15,6 +15,12 @@ import {
 
 import type { LatLng, OSMHazardKind, PaceRole, RouteHazard, SegmentPlan } from "@/types/workout";
 import type { Map as LeafletMapType } from "leaflet";
+import {
+  paceDashArray,
+  pacePatternName,
+  paceRoleLabel,
+  paceStrokeColor,
+} from "@/lib/pace-style";
 
 type LeafletMapProps = {
   start: LatLng | null;
@@ -199,21 +205,22 @@ export function LeafletMap({
   const maxSpeed = speedValues.length ? Math.max(...speedValues) : 0;
   const speedRange = Math.max(1e-6, maxSpeed - minSpeed);
 
-  function getSegmentColorAndLabel(paceRole: PaceRole | undefined, speedMps: number) {
-    if (paceRole === "rest") {
-      return { color: "#2563eb", label: "Rest / recover" };
-    }
-    if (paceRole === "push") {
-      return { color: "#ef4444", label: "Push (cardio)" };
-    }
-    if (paceRole === "steady") {
-      return { color: "#22c55e", label: "Steady cardio" };
-    }
+  function getSegmentStyle(paceRole: PaceRole | undefined, speedMps: number) {
+    const role: PaceRole =
+      paceRole ??
+      (() => {
+        const fraction = (speedMps - minSpeed) / speedRange;
+        if (fraction < 0.33) return "rest";
+        if (fraction < 0.66) return "steady";
+        return "push";
+      })();
 
-    const fraction = (speedMps - minSpeed) / speedRange;
-    if (fraction < 0.33) return { color: "#2563eb", label: "Rest / recover" };
-    if (fraction < 0.66) return { color: "#22c55e", label: "Steady cardio" };
-    return { color: "#ef4444", label: "Push (cardio)" };
+    return {
+      color: paceStrokeColor(role),
+      dashArray: paceDashArray(role),
+      label: `${paceRoleLabel(role)} (${pacePatternName(role)})`,
+      role,
+    };
   }
 
   return (
@@ -239,6 +246,7 @@ export function LeafletMap({
             const groups: {
               key: string;
               color: string;
+              dashArray?: string;
               label: string;
               positions: [number, number][];
             }[] = [];
@@ -254,10 +262,7 @@ export function LeafletMap({
 
               if (!roleChanged) continue;
 
-              const { color, label } = getSegmentColorAndLabel(
-                prev.paceRole,
-                prev.targetSpeedMps,
-              );
+              const style = getSegmentStyle(prev.paceRole, prev.targetSpeedMps);
               const positions: [number, number][] = [];
               for (let p = runStart; p <= i; p += 1) {
                 const point = routePoints[p];
@@ -266,8 +271,9 @@ export function LeafletMap({
               if (positions.length > 1) {
                 groups.push({
                   key: `${runStart}-${i}-${prev.paceRole}`,
-                  color,
-                  label,
+                  color: style.color,
+                  dashArray: style.dashArray,
+                  label: style.label,
                   positions,
                 });
               }
@@ -278,7 +284,11 @@ export function LeafletMap({
               <Polyline
                 key={group.key}
                 positions={group.positions}
-                pathOptions={{ color: group.color, weight: 6 }}
+                pathOptions={{
+                  color: group.color,
+                  weight: group.dashArray ? 6 : 7,
+                  dashArray: group.dashArray,
+                }}
               >
                 <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent={false}>
                   {group.label}
