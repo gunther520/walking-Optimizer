@@ -427,6 +427,23 @@
   border: 1px solid var(--border);
 }
 
+.walkHudStatus {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.walkHudCueNote {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eef6ff;
+  color: #1e3a5f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .walkHudEyebrow {
   display: block;
   font-size: 12px;

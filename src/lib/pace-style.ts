@@ -50,11 +50,13 @@ export function getWalkProgress(
   plan: RoutePlan,
   segmentIndex: number | null,
   elapsedSeconds: number,
+  options?: { onRoute?: boolean },
 ): {
   block: PaceBlockSummary | null;
   blockIndex: number;
   remainingSeconds: number;
   nextBlock: PaceBlockSummary | null;
+  mode: "gps" | "clock";
 } {
   const blocks = plan.paceBlocks ?? [];
   if (!blocks.length) {
@@ -63,10 +65,15 @@ export function getWalkProgress(
       blockIndex: -1,
       remainingSeconds: 0,
       nextBlock: null,
+      mode: "clock",
     };
   }
 
-  if (segmentIndex != null && segmentIndex >= 0) {
+  // Only trust GPS when the walker is actually near the path.
+  // On a PC, geolocation often snaps to a far-off "nearest" segment and would
+  // freeze the HUD if we preferred it over the interval clock.
+  const onRoute = options?.onRoute === true;
+  if (onRoute && segmentIndex != null && segmentIndex >= 0) {
     const found = findPaceBlockAtSegment(blocks, segmentIndex);
     if (found.block) {
       const span =
@@ -85,6 +92,7 @@ export function getWalkProgress(
         blockIndex: found.index,
         remainingSeconds,
         nextBlock: blocks[found.index + 1] ?? null,
+        mode: "gps",
       };
     }
   }
@@ -98,6 +106,7 @@ export function getWalkProgress(
         blockIndex: i,
         remainingSeconds: block.durationSeconds - remaining,
         nextBlock: blocks[i + 1] ?? null,
+        mode: "clock",
       };
     }
     remaining -= block.durationSeconds;
@@ -109,6 +118,7 @@ export function getWalkProgress(
     blockIndex: blocks.length - 1,
     remainingSeconds: 0,
     nextBlock: null,
+    mode: "clock",
   };
 }
 

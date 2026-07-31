@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
-import { formatDistance, formatDuration, getNearestSegmentIndex, haversineDistance } from "@/lib/route-math";
+import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 import { estimateHrFromVo2, getDefaultSpeedBounds, getWorkoutCopy, metsFromVo2, vo2FromSpeedAndGrade } from "@/lib/training";
 import type { LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
 
@@ -33,6 +33,7 @@ type LiveStats = {
   estimatedMets: number;
   recommendation: string;
   segmentIndex: number;
+  distanceToRouteMeters: number;
 };
 
 const DEFAULT_FORM: PlannerFormState = {
@@ -86,7 +87,8 @@ export function WorkoutPlanner() {
           return;
         }
 
-        const segmentIndex = getNearestSegmentIndex(nextPoint, routePlan.segments);
+        const nearest = getNearestSegmentMatch(nextPoint, routePlan.segments);
+        const segmentIndex = nearest.segmentIndex;
         const segment = routePlan.segments[segmentIndex];
         const target = routePlan.speedPlan[segmentIndex];
         const vo2 = vo2FromSpeedAndGrade(speedMps || target.targetSpeedMps, Math.max(-0.08, segment.grade));
@@ -122,6 +124,7 @@ export function WorkoutPlanner() {
           estimatedMets: metsFromVo2(vo2),
           recommendation,
           segmentIndex,
+          distanceToRouteMeters: nearest.distanceMeters,
         });
       },
       (geoError) => {
@@ -452,6 +455,9 @@ export function WorkoutPlanner() {
             <WalkHud
               routePlan={routePlan}
               liveSegmentIndex={liveStats?.segmentIndex ?? null}
+              onRoute={
+                liveStats != null && liveStats.distanceToRouteMeters <= 40
+              }
             />
           ) : null}
 

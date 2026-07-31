@@ -142,7 +142,20 @@ describe("getWalkProgress", () => {
     const first = plan.paceBlocks[0];
     const mid = getWalkProgress(plan, null, first.durationSeconds / 2);
     expect(mid.blockIndex).toBe(0);
+    expect(mid.mode).toBe("clock");
     expect(mid.remainingSeconds).toBeGreaterThan(0);
     expect(mid.remainingSeconds).toBeLessThan(first.durationSeconds);
+  });
+
+  it("ignores off-route GPS and keeps using the clock", () => {
+    const points = makeLine(1200);
+    const segments = buildSegments(points);
+    const plan = buildRoutePlan(points, segments, [], profile, []);
+    const first = plan.paceBlocks[0];
+    const mid = getWalkProgress(plan, 0, first.durationSeconds / 2, {
+      onRoute: false,
+    });
+    expect(mid.mode).toBe("clock");
+    expect(mid.remainingSeconds).toBeCloseTo(first.durationSeconds / 2, 0);
   });
 });

@@ -10,19 +10,29 @@ import {
   playIntervalCue,
 } from "@/lib/pace-style";
 import { formatDuration } from "@/lib/route-math";
-import type { RoutePlan } from "@/types/workout";
+import type { PaceRole, RoutePlan } from "@/types/workout";
 
 import styles from "@/app/page.module.css";
 
 type WalkHudProps = {
   routePlan: RoutePlan;
   liveSegmentIndex: number | null;
+  /** True only when GPS fix is near the planned path. */
+  onRoute: boolean;
 };
 
-export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
+const DEMO_SPEED = 10;
+
+export function WalkHud({
+  routePlan,
+  liveSegmentIndex,
+  onRoute,
+}: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
+  const [demoFast, setDemoFast] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [lastCueNote, setLastCueNote] = useState<string | null>(null);
   const pausedElapsedRef = useRef(0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
@@ -30,9 +40,10 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
   useEffect(() => {
     if (!walking) {
       if (walkingSinceRef.current != null) {
-        pausedElapsedRef.current += Math.floor(
-          (performance.now() - walkingSinceRef.current) / 1000,
-        );
+        const speed = demoFast ? DEMO_SPEED : 1;
+        pausedElapsedRef.current +=
+          Math.floor((performance.now() - walkingSinceRef.current) / 1000) *
+          speed;
         walkingSinceRef.current = null;
         setElapsedSeconds(pausedElapsedRef.current);
       }
@@ -43,19 +54,21 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
     const timer = window.setInterval(() => {
       const since = walkingSinceRef.current;
       if (since == null) return;
+      const speed = demoFast ? DEMO_SPEED : 1;
       setElapsedSeconds(
         pausedElapsedRef.current +
-          Math.floor((performance.now() - since) / 1000),
+          Math.floor((performance.now() - since) / 1000) * speed,
       );
     }, 400);
 
     return () => window.clearInterval(timer);
-  }, [walking]);
+  }, [walking, demoFast]);
 
   const progress = getWalkProgress(
     routePlan,
     liveSegmentIndex,
     elapsedSeconds,
+    { onRoute },
   );
   const role = progress.block?.paceRole ?? null;
 
@@ -64,6 +77,9 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
     if (lastRoleRef.current === role) return;
     if (lastRoleRef.current != null) {
       playIntervalCue(role);
+      setLastCueNote(
+        `Cue played: switch to ${paceRoleLabel(role)} (${pacePatternName(role)})`,
+      );
     }
     lastRoleRef.current = role;
   }, [walking, cuesOn, role]);
@@ -76,6 +92,9 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
     if (cuesOn && progress.block && lastRoleRef.current == null) {
       playIntervalCue(progress.block.paceRole);
       lastRoleRef.current = progress.block.paceRole;
+      setLastCueNote(
+        `Cue played: start ${paceRoleLabel(progress.block.paceRole)}`,
+      );
     }
   }
 
@@ -89,6 +108,14 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
     lastRoleRef.current = null;
+    setLastCueNote(null);
+  }
+
+  function handleTestCue(nextRole: PaceRole = "push") {
+    playIntervalCue(nextRole);
+    setLastCueNote(
+      `Test cue: ${paceRoleLabel(nextRole)} beep (vibration needs a phone)`,
+    );
   }
 
   const roleClass =
@@ -108,9 +135,17 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
             checked={cuesOn}
             onChange={(event) => setCuesOn(event.target.checked)}
           />
-          Sound / vibrate cues
+          Sound cues
         </label>
       </div>
+
+      <p className={styles.walkHudStatus}>
+        {progress.mode === "gps" && onRoute
+          ? "Tracking GPS on the route — intervals follow your position."
+          : demoFast
+            ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
+            : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep fires when the role changes."}
+      </p>
 
       <div className={`${styles.walkHudMain} ${roleClass}`}>
         <span className={styles.walkHudEyebrow}>
@@ -130,7 +165,7 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
         </p>
         <div className={styles.walkHudCountdown}>
           {formatDuration(Math.round(progress.remainingSeconds))}
-          <span>left in interval</span>
+          <span>left until next role change / cue</span>
         </div>
       </div>
 
@@ -148,6 +183,19 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
           <strong>{formatDuration(elapsedSeconds)}</strong>
         </div>
       </div>
+
+      {lastCueNote ? (
+        <p className={styles.walkHudCueNote}>{lastCueNote}</p>
+      ) : null}
+
+      <label className={styles.cueToggle}>
+        <input
+          type="checkbox"
+          checked={demoFast}
+          onChange={(event) => setDemoFast(event.target.checked)}
+        />
+        PC demo speed (10×) — hear cues without waiting 3 minutes
+      </label>
 
       <div className={styles.walkHudActions}>
         {!walking ? (
@@ -168,6 +216,13 @@ export function WalkHud({ routePlan, liveSegmentIndex }: WalkHudProps) {
           Reset
         </button>
       </div>
+      <button
+        className={styles.secondaryButton}
+        type="button"
+        onClick={() => handleTestCue(role ?? "push")}
+      >
+        Test beep now
+      </button>
     </div>
   );
 }
