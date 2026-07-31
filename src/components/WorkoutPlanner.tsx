@@ -481,7 +481,9 @@ export function WorkoutPlanner() {
                 <h2>Segment pacing preview</h2>
                 <p className={styles.cardText}>
                   Route edges are split into ~12 m steps so each pair stays near
-                  90s push (75%) + 30s recovery (25%). Zone 2 is max on Push only.
+                  180s push (75%) + 60s recovery (25%). Zone 2 is max on Push
+                  only. Longer routes ease target bpm so average effort stays
+                  sustainable.
                 </p>
                 <div className={styles.segmentTable}>
                   <div className={`${styles.segmentRow} ${styles.segmentHeader}`}>

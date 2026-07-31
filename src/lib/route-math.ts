@@ -39,7 +39,7 @@ export function buildSegments(points: LatLng[]): RouteSegment[] {
 
 /**
  * Insert interpolated points so no edge is longer than maxStepMeters.
- * Needed so push/recovery time targets (~90s / ~30s) are not blown by huge GraphHopper edges.
+ * Needed so push/recovery time targets (~180s / ~60s) are not blown by huge GraphHopper edges.
  */
 export function densifyRoutePoints(
   points: LatLng[],

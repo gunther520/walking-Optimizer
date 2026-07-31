@@ -51,15 +51,41 @@ export function getRoleHrr(level: WorkoutLevel, role: PaceRole) {
   return ROLE_HRR[level][role];
 }
 
-/** Midpoint intensity inside the role's HR zone. */
-export function intensityForRole(role: PaceRole, profile: WorkoutProfile) {
-  const band = getRoleHrr(profile.workoutLevel, role);
-  return (band.low + band.high) / 2;
+/**
+ * Short routes keep full intensity; longer walks ease HR so average bpm drops.
+ * ≤2 km → 100%, ≥8 km → ~86% of short-route effort (smooth in between).
+ */
+export function distanceEffortScale(routeDistanceMeters: number) {
+  const SHORT_FULL_METERS = 2000;
+  const LONG_SOFT_METERS = 8000;
+  const MIN_SCALE = 0.86;
+
+  if (routeDistanceMeters <= SHORT_FULL_METERS) return 1;
+  if (routeDistanceMeters >= LONG_SOFT_METERS) return MIN_SCALE;
+
+  const t =
+    (routeDistanceMeters - SHORT_FULL_METERS) /
+    (LONG_SOFT_METERS - SHORT_FULL_METERS);
+  return 1 - t * (1 - MIN_SCALE);
 }
 
-export function targetHrForRole(role: PaceRole, profile: WorkoutProfile) {
+/** Midpoint intensity inside the role's HR zone. */
+export function intensityForRole(
+  role: PaceRole,
+  profile: WorkoutProfile,
+  effortScale = 1,
+) {
+  const band = getRoleHrr(profile.workoutLevel, role);
+  return ((band.low + band.high) / 2) * effortScale;
+}
+
+export function targetHrForRole(
+  role: PaceRole,
+  profile: WorkoutProfile,
+  effortScale = 1,
+) {
   const hrMax = estimateHrMax(profile.age);
-  const intensity = intensityForRole(role, profile);
+  const intensity = intensityForRole(role, profile, effortScale);
   return Math.round(
     profile.restingHr + (hrMax - profile.restingHr) * intensity,
   );
@@ -72,18 +98,23 @@ export function zoneLabelForRole(role: PaceRole) {
 }
 
 /** Overall UI band: Zone 1–2 (Zone 2 is the max). */
-export function getZoneBand(profile: WorkoutProfile): ZoneBand {
+export function getZoneBand(
+  profile: WorkoutProfile,
+  effortScale = 1,
+): ZoneBand {
   const rest = getRoleHrr(profile.workoutLevel, "rest");
   const push = getRoleHrr(profile.workoutLevel, "push");
   const hrMax = estimateHrMax(profile.age);
   const minHr =
-    profile.restingHr + (hrMax - profile.restingHr) * rest.low;
+    profile.restingHr +
+    (hrMax - profile.restingHr) * rest.low * effortScale;
   const maxHr =
-    profile.restingHr + (hrMax - profile.restingHr) * push.high;
+    profile.restingHr +
+    (hrMax - profile.restingHr) * push.high * effortScale;
 
   return {
-    minFraction: rest.low,
-    maxFraction: push.high,
+    minFraction: rest.low * effortScale,
+    maxFraction: push.high * effortScale,
     minHr: Math.round(minHr),
     maxHr: Math.round(maxHr),
     hrMax,

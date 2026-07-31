@@ -1,4 +1,5 @@
 import {
+  distanceEffortScale,
   estimateHrFromVo2,
   getZoneBand,
   metsFromVo2,
@@ -37,9 +38,9 @@ type IntervalBlock = {
 /** Every alternating pair: 75% push + 25% recovery, same pair length. */
 const PUSH_TIME_RATIO = 0.75;
 const RECOVERY_TIME_RATIO = 0.25;
-const PAIR_SECONDS = 120;
-const PUSH_SECONDS = PAIR_SECONDS * PUSH_TIME_RATIO; // 90
-const RECOVERY_SECONDS = PAIR_SECONDS * RECOVERY_TIME_RATIO; // 30
+const PAIR_SECONDS = 240;
+const PUSH_SECONDS = PAIR_SECONDS * PUSH_TIME_RATIO; // 180
+const RECOVERY_SECONDS = PAIR_SECONDS * RECOVERY_TIME_RATIO; // 60
 /** Keep edges short so time targets stay accurate. */
 const DENSIFY_STEP_METERS = 12;
 
@@ -94,8 +95,9 @@ function estimateSegmentSeconds(
   segment: RouteSegment,
   profile: WorkoutProfile,
   role: PaceRole,
+  effortScale: number,
 ) {
-  const targetHr = targetHrForRole(role, profile);
+  const targetHr = targetHrForRole(role, profile, effortScale);
   const speed = speedForTargetHr(segment, profile, targetHr, role);
   return segment.distanceMeters / Math.max(speed, 0.2);
 }
@@ -111,6 +113,7 @@ function takeTimedBlock(
   startAt: number,
   role: PaceRole,
   targetSeconds: number,
+  effortScale: number,
 ): { block: IntervalBlock | null; nextIndex: number } {
   if (startAt >= segments.length) {
     return { block: null, nextIndex: startAt };
@@ -126,7 +129,7 @@ function takeTimedBlock(
   while (i < segments.length) {
     const segment = segments[i];
     const hazards = hazardKindsForSegment(i, hazardsBySegment);
-    const seconds = estimateSegmentSeconds(segment, profile, role);
+    const seconds = estimateSegmentSeconds(segment, profile, role, effortScale);
 
     // Stop before adding if we are already near target and this would overshoot.
     if (durationSeconds >= targetSeconds * 0.92) break;
@@ -151,7 +154,12 @@ function takeTimedBlock(
   if (i === startAt && startAt < segments.length) {
     const segment = segments[startAt];
     const hazards = hazardKindsForSegment(startAt, hazardsBySegment);
-    const seconds = estimateSegmentSeconds(segment, profile, role);
+    const seconds = estimateSegmentSeconds(
+      segment,
+      profile,
+      role,
+      effortScale,
+    );
     distanceMeters = segment.distanceMeters;
     durationSeconds = seconds;
     gradeWeighted = segment.grade * segment.distanceMeters;
@@ -170,7 +178,7 @@ function takeTimedBlock(
       avgGrade: distanceMeters > 0 ? gradeWeighted / distanceMeters : 0,
       hazards: [...hazardSet],
       role,
-      targetHr: targetHrForRole(role, profile),
+      targetHr: targetHrForRole(role, profile, effortScale),
     },
   };
 }
@@ -203,12 +211,13 @@ function buildHazardMap(hazards: RouteHazard[]) {
 
 /**
  * Strict pairs with consistent timing on densified geometry:
- * push (~90s, 75%) → one recovery (~30s, 25%) → repeat.
+ * push (~180s, 75%) → one recovery (~60s, 25%) → repeat.
  */
 function buildBalancedPairs(
   segments: RouteSegment[],
   hazardsBySegment: Map<number, OSMHazardKind[]>,
   profile: WorkoutProfile,
+  effortScale: number,
 ): IntervalBlock[] {
   if (!segments.length) return [];
 
@@ -236,6 +245,7 @@ function buildBalancedPairs(
       i,
       "push",
       pushTarget,
+      effortScale,
     );
     if (!push.block) break;
     blocks.push(push.block);
@@ -252,18 +262,20 @@ function buildBalancedPairs(
       i,
       recoveryRole,
       recoveryTarget,
+      effortScale,
     );
     if (!recovery.block) break;
     blocks.push(recovery.block);
     i = recovery.nextIndex;
   }
 
-  return ensureStrictAlternation(blocks, profile);
+  return ensureStrictAlternation(blocks, profile, effortScale);
 }
 
 function ensureStrictAlternation(
   blocks: IntervalBlock[],
   profile: WorkoutProfile,
+  effortScale: number,
 ): IntervalBlock[] {
   const out: IntervalBlock[] = [];
   for (const block of blocks) {
@@ -272,7 +284,7 @@ function ensureStrictAlternation(
       out.push({
         ...block,
         role: "rest",
-        targetHr: targetHrForRole("rest", profile),
+        targetHr: targetHrForRole("rest", profile, effortScale),
       });
       continue;
     }
@@ -292,7 +304,7 @@ function ensureStrictAlternation(
         avgGrade: distanceMeters > 0 ? gradeWeighted / distanceMeters : 0,
         hazards: [...new Set([...prev.hazards, ...block.hazards])],
         role,
-        targetHr: targetHrForRole(role, profile),
+        targetHr: targetHrForRole(role, profile, effortScale),
       };
       continue;
     }
@@ -328,6 +340,7 @@ function lightSmooth(plans: SegmentPlan[], profile: WorkoutProfile) {
 function summarizePaceBlocks(
   blocks: IntervalBlock[],
   profile: WorkoutProfile,
+  effortScale: number,
 ): PaceBlockSummary[] {
   return blocks.map((block, index) => ({
     index,
@@ -341,7 +354,7 @@ function summarizePaceBlocks(
         ? block.distanceMeters / block.durationSeconds
         : 0,
     avgHr: block.targetHr,
-    targetHr: targetHrForRole(block.role, profile),
+    targetHr: targetHrForRole(block.role, profile, effortScale),
     zoneLabel: zoneLabelForRole(block.role),
   }));
 }
@@ -353,11 +366,16 @@ export function buildRoutePlan(
   profile: WorkoutProfile,
   hazards: RouteHazard[],
 ): RoutePlan {
-  const zoneBand = getZoneBand(profile);
-
-  // Densify first so 90s/30s targets are enforceable.
+  // Densify first so 180s/60s targets are enforceable.
   const densifiedPoints = densifyRoutePoints(points, DENSIFY_STEP_METERS);
   const densifiedSegments = buildSegments(densifiedPoints);
+  const totalDistanceMeters = densifiedSegments.reduce(
+    (sum, segment) => sum + segment.distanceMeters,
+    0,
+  );
+  const effortScale = distanceEffortScale(totalDistanceMeters);
+  const zoneBand = getZoneBand(profile, effortScale);
+
   const remappedHazards = remapHazardsToSegments(hazards, densifiedSegments);
   const hazardsBySegment = buildHazardMap(remappedHazards);
 
@@ -375,6 +393,7 @@ export function buildRoutePlan(
     densifiedSegments,
     hazardsBySegment,
     profile,
+    effortScale,
   );
   const roleBySegment = new Map<number, PaceRole>();
   for (const block of blocks) {
@@ -385,7 +404,7 @@ export function buildRoutePlan(
 
   const rawPlan: SegmentPlan[] = densifiedSegments.map((segment) => {
     const role = roleBySegment.get(segment.index) ?? "steady";
-    const targetHr = targetHrForRole(role, profile);
+    const targetHr = targetHrForRole(role, profile, effortScale);
     const targetSpeedMps = speedForTargetHr(segment, profile, targetHr, role);
     const vo2 = vo2FromSpeedAndGrade(
       targetSpeedMps,
@@ -402,7 +421,7 @@ export function buildRoutePlan(
   });
 
   const speedPlan = lightSmooth(rawPlan, profile).map((plan) => {
-    const targetHr = targetHrForRole(plan.paceRole, profile);
+    const targetHr = targetHrForRole(plan.paceRole, profile, effortScale);
     const segment = densifiedSegments[plan.segmentIndex];
     const vo2 = vo2FromSpeedAndGrade(
       plan.targetSpeedMps,
@@ -415,11 +434,6 @@ export function buildRoutePlan(
       estimatedMets: metsFromVo2(vo2),
     };
   });
-
-  const totalDistanceMeters = densifiedSegments.reduce(
-    (sum, segment) => sum + segment.distanceMeters,
-    0,
-  );
 
   const estimatedDurationSeconds = densifiedSegments.reduce(
     (sum, segment, index) => {
@@ -445,11 +459,12 @@ export function buildRoutePlan(
   const pushCount = blocks.filter((b) => b.role === "push").length;
   const restCount = blocks.filter((b) => b.role === "rest").length;
   const steadyCount = blocks.filter((b) => b.role === "steady").length;
-  const paceBlocks = summarizePaceBlocks(blocks, profile);
+  const paceBlocks = summarizePaceBlocks(blocks, profile, effortScale);
 
-  const pushHr = targetHrForRole("push", profile);
-  const steadyHr = targetHrForRole("steady", profile);
-  const restHr = targetHrForRole("rest", profile);
+  const pushHr = targetHrForRole("push", profile, effortScale);
+  const steadyHr = targetHrForRole("steady", profile, effortScale);
+  const restHr = targetHrForRole("rest", profile, effortScale);
+  const effortPct = Math.round(effortScale * 100);
 
   // Silence unused original segments param contract (callers still pass GH segments).
   void segments;
@@ -465,6 +480,7 @@ export function buildRoutePlan(
     estimatedDurationSeconds,
     instructionSummary: [
       `HR intervals: Push Z2 ~${pushHr} bpm / Steady low-Z2 ~${steadyHr} bpm / Rest Z1 ~${restHr} bpm`,
+      `Distance effort ${effortPct}% of short-route intensity (longer routes ease average bpm)`,
       `Pair timing target 75/25 (~${PUSH_SECONDS}s push / ~${RECOVERY_SECONDS}s recovery). Actual push share ~${pushShare}%`,
       `Blocks: ${pushCount} push / ${steadyCount} steady / ${restCount} rest · push ~${Math.round(pushMeters)} m / ~${Math.round(pushSeconds)} s`,
       ...hazardSummary,
