@@ -43,6 +43,12 @@ describe("distanceEffortScale", () => {
     expect(distanceEffortScale(12000)).toBe(0.86);
   });
 
+  it("lets conserve ease more than challenge", () => {
+    const conserve = distanceEffortScale(5000, "conserve");
+    const challenge = distanceEffortScale(5000, "challenge");
+    expect(conserve).toBeLessThan(challenge);
+  });
+
   it("lowers target HR as distance grows", () => {
     const shortHr = targetHrForRole("push", profile, distanceEffortScale(1500));
     const longHr = targetHrForRole("push", profile, distanceEffortScale(9000));

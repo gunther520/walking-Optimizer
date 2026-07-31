@@ -1,4 +1,10 @@
-import type { PaceRole, WorkoutLevel, WorkoutProfile, ZoneBand } from "@/types/workout";
+import type {
+  EffortPreference,
+  PaceRole,
+  WorkoutLevel,
+  WorkoutProfile,
+  ZoneBand,
+} from "@/types/workout";
 
 /**
  * Classic Karvonen HR zones for interval walking.
@@ -53,20 +59,32 @@ export function getRoleHrr(level: WorkoutLevel, role: PaceRole) {
 
 /**
  * Short routes keep full intensity; longer walks ease HR so average bpm drops.
- * ≤2 km → 100%, ≥8 km → ~86% of short-route effort (smooth in between).
+ * Preference shifts how early / how much easing applies.
  */
-export function distanceEffortScale(routeDistanceMeters: number) {
-  const SHORT_FULL_METERS = 2000;
-  const LONG_SOFT_METERS = 8000;
-  const MIN_SCALE = 0.86;
+export function distanceEffortScale(
+  routeDistanceMeters: number,
+  preference: EffortPreference = "balanced",
+) {
+  const curve =
+    preference === "conserve"
+      ? { shortFull: 1500, longSoft: 6000, minScale: 0.78 }
+      : preference === "challenge"
+        ? { shortFull: 3000, longSoft: 10000, minScale: 0.94 }
+        : { shortFull: 2000, longSoft: 8000, minScale: 0.86 };
 
-  if (routeDistanceMeters <= SHORT_FULL_METERS) return 1;
-  if (routeDistanceMeters >= LONG_SOFT_METERS) return MIN_SCALE;
+  if (routeDistanceMeters <= curve.shortFull) return 1;
+  if (routeDistanceMeters >= curve.longSoft) return curve.minScale;
 
   const t =
-    (routeDistanceMeters - SHORT_FULL_METERS) /
-    (LONG_SOFT_METERS - SHORT_FULL_METERS);
-  return 1 - t * (1 - MIN_SCALE);
+    (routeDistanceMeters - curve.shortFull) /
+    (curve.longSoft - curve.shortFull);
+  return 1 - t * (1 - curve.minScale);
+}
+
+export function effortPreferenceLabel(preference: EffortPreference) {
+  if (preference === "conserve") return "Conserve (easier on long routes)";
+  if (preference === "challenge") return "Challenge (hold intensity longer)";
+  return "Balanced";
 }
 
 /** Midpoint intensity inside the role's HR zone. */

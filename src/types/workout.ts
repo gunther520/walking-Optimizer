@@ -6,6 +6,9 @@ export type LatLng = {
 
 export type WorkoutLevel = "beginner" | "intermediate" | "advanced";
 
+/** How aggressively long routes ease average bpm. */
+export type EffortPreference = "conserve" | "balanced" | "challenge";
+
 export type WorkoutProfile = {
   age: number;
   weightKg: number;
@@ -13,6 +16,7 @@ export type WorkoutProfile = {
   workoutLevel: WorkoutLevel;
   minSpeedMps: number;
   maxSpeedMps: number;
+  effortPreference?: EffortPreference;
 };
 
 export type RouteSegment = {

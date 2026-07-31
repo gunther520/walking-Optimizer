@@ -1,13 +1,25 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
+import {
+  clearPlannerState,
+  loadPlannerState,
+  savePlannerState,
+} from "@/lib/planner-storage";
 import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
-import { estimateHrFromVo2, getDefaultSpeedBounds, getWorkoutCopy, metsFromVo2, vo2FromSpeedAndGrade } from "@/lib/training";
-import type { LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
+import {
+  effortPreferenceLabel,
+  estimateHrFromVo2,
+  getDefaultSpeedBounds,
+  getWorkoutCopy,
+  metsFromVo2,
+  vo2FromSpeedAndGrade,
+} from "@/lib/training";
+import type { EffortPreference, LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
 
 import styles from "@/app/page.module.css";
 
@@ -25,6 +37,7 @@ type PlannerFormState = {
   workoutLevel: WorkoutLevel;
   minSpeedMps: number;
   maxSpeedMps: number;
+  effortPreference: EffortPreference;
 };
 
 type LiveStats = {
@@ -43,22 +56,102 @@ const DEFAULT_FORM: PlannerFormState = {
   workoutLevel: "intermediate",
   minSpeedMps: 1,
   maxSpeedMps: 1.75,
+  effortPreference: "balanced",
 };
 
+function readClientMounted() {
+  return true;
+}
+
+function readServerMounted() {
+  return false;
+}
+
+function subscribeNoop() {
+  return () => {};
+}
+
+function createInitialFromStorage() {
+  const stored = loadPlannerState();
+  if (!stored) {
+    return {
+      form: DEFAULT_FORM,
+      start: null as LatLng | null,
+      end: null as LatLng | null,
+      routePlan: null as RoutePlan | null,
+      mapLocked: false,
+      gpsConsent: false,
+      saveNote: null as string | null,
+    };
+  }
+
+  return {
+    form: {
+      ...DEFAULT_FORM,
+      ...stored.form,
+      effortPreference: stored.form.effortPreference ?? "balanced",
+    },
+    start: stored.start,
+    end: stored.end,
+    routePlan: stored.routePlan,
+    mapLocked: Boolean(stored.mapLocked && stored.routePlan),
+    gpsConsent: Boolean(stored.gpsConsent),
+    saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
+  };
+}
+
 export function WorkoutPlanner() {
-  const [form, setForm] = useState(DEFAULT_FORM);
-  const [start, setStart] = useState<LatLng | null>(null);
-  const [end, setEnd] = useState<LatLng | null>(null);
-  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null);
+  const mounted = useSyncExternalStore(
+    subscribeNoop,
+    readClientMounted,
+    readServerMounted,
+  );
+
+  if (!mounted) {
+    return (
+      <div className={styles.page}>
+        <section className={styles.hero}>
+          <div>
+            <p className={styles.eyebrow}>Aerobic route pacing</p>
+            <h1>Walking optimizer for cardio training on real routes</h1>
+            <p className={styles.subtitle}>Loading your local planner session…</p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return <WorkoutPlannerClient />;
+}
+
+function WorkoutPlannerClient() {
+  const initial = useMemo(() => createInitialFromStorage(), []);
+  const [form, setForm] = useState(initial.form);
+  const [start, setStart] = useState<LatLng | null>(initial.start);
+  const [end, setEnd] = useState<LatLng | null>(initial.end);
+  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(initial.routePlan);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
-  const [mapLocked, setMapLocked] = useState(false);
+  const [mapLocked, setMapLocked] = useState(initial.mapLocked);
+  const [gpsConsent, setGpsConsent] = useState(initial.gpsConsent);
+  const [saveNote, setSaveNote] = useState<string | null>(initial.saveNote);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
 
   useEffect(() => {
-    if (!routePlan || !("geolocation" in navigator)) {
+    savePlannerState({
+      form,
+      start,
+      end,
+      routePlan,
+      mapLocked,
+      gpsConsent,
+    });
+  }, [form, start, end, routePlan, mapLocked, gpsConsent]);
+
+  useEffect(() => {
+    if (!gpsConsent || !routePlan || !("geolocation" in navigator)) {
       return;
     }
 
@@ -100,6 +193,7 @@ export function WorkoutPlanner() {
             workoutLevel: form.workoutLevel,
             minSpeedMps: form.minSpeedMps,
             maxSpeedMps: form.maxSpeedMps,
+            effortPreference: form.effortPreference,
           },
           vo2,
         );
@@ -134,7 +228,7 @@ export function WorkoutPlanner() {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [form, routePlan]);
+  }, [form, routePlan, gpsConsent]);
 
   const summaryCards = useMemo(() => {
     if (!routePlan) {
@@ -187,12 +281,28 @@ export function WorkoutPlanner() {
     setLiveStats(null);
     setError(null);
     setMapLocked(false);
+    setCurrentPosition(null);
     lastFixRef.current = null;
+    clearPlannerState();
+    setSaveNote("Cleared local session.");
   }
 
   function handleEditRoutePoints() {
     setMapLocked(false);
     setError(null);
+  }
+
+  function handleEnableGps() {
+    setGpsConsent(true);
+    setError(null);
+    setSaveNote("GPS enabled for this browser. Location stays on your device.");
+  }
+
+  function handleDisableGps() {
+    setGpsConsent(false);
+    setCurrentPosition(null);
+    setLiveStats(null);
+    lastFixRef.current = null;
   }
 
   const pickHint = mapLocked
@@ -238,6 +348,7 @@ export function WorkoutPlanner() {
       setLiveStats(null);
       setMapLocked(true);
       lastFixRef.current = null;
+      setSaveNote("Plan saved in this browser for next visit.");
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -353,6 +464,27 @@ export function WorkoutPlanner() {
               </label>
             </div>
 
+            <label className={styles.field}>
+              <span>Long-route effort</span>
+              <select
+                value={form.effortPreference}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    effortPreference: event.target.value as EffortPreference,
+                  }))
+                }
+              >
+                <option value="conserve">Conserve — ease bpm sooner on long walks</option>
+                <option value="balanced">Balanced — default distance easing</option>
+                <option value="challenge">Challenge — keep intensity higher longer</option>
+              </select>
+            </label>
+            <p className={styles.cardText}>
+              {effortPreferenceLabel(form.effortPreference)}. Rebuild the route after
+              changing this.
+            </p>
+
             <button className={styles.primaryButton} onClick={handleBuildRoute} disabled={loading}>
               {loading ? "Building route..." : "Build aerobic walking plan"}
             </button>
@@ -373,6 +505,38 @@ export function WorkoutPlanner() {
               Clear points & route
             </button>
             <p className={styles.pickHint}>{pickHint}</p>
+            {saveNote ? <p className={styles.saveNote}>{saveNote}</p> : null}
+          </div>
+
+          <div className={styles.card}>
+            <h2>Live GPS</h2>
+            <p className={styles.cardText}>
+              Location is optional and only used in this browser to match you to the
+              planned path. It is not uploaded to a server or saved beyond this device.
+            </p>
+            {!gpsConsent ? (
+              <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={handleEnableGps}
+                disabled={!routePlan}
+              >
+                Enable live GPS guidance
+              </button>
+            ) : (
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={handleDisableGps}
+              >
+                Turn off GPS
+              </button>
+            )}
+            <p className={styles.pickHint}>
+              {gpsConsent
+                ? "GPS on — walk mode can follow your position when you are near the route."
+                : "GPS off — walk mode still works on the interval clock (best for PC)."}
+            </p>
           </div>
 
           <div className={styles.card}>
@@ -382,7 +546,7 @@ export function WorkoutPlanner() {
               <li>Click a second time to set the destination.</li>
               <li>Build the route — the map locks and focuses on the path.</li>
               <li>Press “Change start & end” to unlock and pick new points.</li>
-              <li>Allow geolocation to see live pace guidance.</li>
+              <li>Optionally enable GPS for live pace guidance on the path.</li>
             </ol>
           </div>
 

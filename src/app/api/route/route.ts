@@ -20,6 +20,7 @@ type RouteRequestBody = {
     workoutLevel: WorkoutLevel;
     minSpeedMps?: number;
     maxSpeedMps?: number;
+    effortPreference?: "conserve" | "balanced" | "challenge";
   };
 };
 
@@ -28,6 +29,14 @@ export async function POST(request: Request) {
     const body = (await request.json()) as RouteRequestBody;
     const defaults = getDefaultSpeedBounds(body.profile.workoutLevel);
 
+    const preference = body.profile.effortPreference;
+    const effortPreference =
+      preference === "conserve" ||
+      preference === "balanced" ||
+      preference === "challenge"
+        ? preference
+        : "balanced";
+
     const profile: WorkoutProfile = {
       age: Number(body.profile.age),
       weightKg: Number(body.profile.weightKg),
@@ -35,6 +44,7 @@ export async function POST(request: Request) {
       workoutLevel: body.profile.workoutLevel,
       minSpeedMps: Number(body.profile.minSpeedMps ?? defaults.minSpeedMps),
       maxSpeedMps: Number(body.profile.maxSpeedMps ?? defaults.maxSpeedMps),
+      effortPreference,
     };
 
     if (!body.start || !body.end) {

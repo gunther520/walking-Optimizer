@@ -373,7 +373,10 @@ export function buildRoutePlan(
     (sum, segment) => sum + segment.distanceMeters,
     0,
   );
-  const effortScale = distanceEffortScale(totalDistanceMeters);
+  const effortScale = distanceEffortScale(
+    totalDistanceMeters,
+    profile.effortPreference ?? "balanced",
+  );
   const zoneBand = getZoneBand(profile, effortScale);
 
   const remappedHazards = remapHazardsToSegments(hazards, densifiedSegments);
@@ -480,7 +483,7 @@ export function buildRoutePlan(
     estimatedDurationSeconds,
     instructionSummary: [
       `HR intervals: Push Z2 ~${pushHr} bpm / Steady low-Z2 ~${steadyHr} bpm / Rest Z1 ~${restHr} bpm`,
-      `Distance effort ${effortPct}% of short-route intensity (longer routes ease average bpm)`,
+      `Distance effort ${effortPct}% of short-route intensity (${profile.effortPreference ?? "balanced"} preference)`,
       `Pair timing target 75/25 (~${PUSH_SECONDS}s push / ~${RECOVERY_SECONDS}s recovery). Actual push share ~${pushShare}%`,
       `Blocks: ${pushCount} push / ${steadyCount} steady / ${restCount} rest · push ~${Math.round(pushMeters)} m / ~${Math.round(pushSeconds)} s`,
       ...hazardSummary,
