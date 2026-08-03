@@ -69,12 +69,14 @@ function buildRequestBody(
   start: LatLng,
   end: LatLng,
   preference: RoutePreference,
+  vias: LatLng[] = [],
 ) {
   const customModel = buildRouteCustomModel(preference);
   return {
     profile: "foot",
     points: [
       [start.lng, start.lat],
+      ...vias.map((via) => [via.lng, via.lat] as [number, number]),
       [end.lng, end.lat],
     ],
     elevation: true,
@@ -139,6 +141,7 @@ export async function fetchWalkingRoute(
   start: LatLng,
   end: LatLng,
   preference: RoutePreference = "default",
+  vias: LatLng[] = [],
 ) {
   const apiKey = process.env.GRAPHOPPER_KEY;
 
@@ -146,7 +149,7 @@ export async function fetchWalkingRoute(
     throw new Error("Missing GRAPHOPPER_KEY environment variable.");
   }
 
-  const preferredBody = buildRequestBody(start, end, preference);
+  const preferredBody = buildRequestBody(start, end, preference, vias);
   let { response, data } = await postGraphHopperRoute(apiKey, preferredBody);
   let usedPreference: RoutePreference = preference;
   let fallbackNote: string | undefined;
@@ -158,7 +161,7 @@ export async function fetchWalkingRoute(
     }). Using the default walking route instead.`;
     ({ response, data } = await postGraphHopperRoute(
       apiKey,
-      buildRequestBody(start, end, "default"),
+      buildRequestBody(start, end, "default", vias),
     ));
     usedPreference = "default";
   }

@@ -19,6 +19,7 @@ export type StoredPlannerState = {
   routePlan: RoutePlan | null;
   mapLocked: boolean;
   gpsConsent: boolean;
+  viaPoints?: Array<{ id: string; location: LatLng }>;
   savedAt: string;
 };
 

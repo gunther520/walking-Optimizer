@@ -53,3 +53,9 @@ a {
   background: transparent !important;
   border: none !important;
 }
+
+.via-icon,
+.path-handle-icon {
+  background: transparent !important;
+  border: none !important;
+}

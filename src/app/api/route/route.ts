@@ -18,6 +18,7 @@ import type {
 type RouteRequestBody = {
   start: { lat: number; lng: number };
   end: { lat: number; lng: number };
+  vias?: Array<{ lat: number; lng: number }>;
   profile: {
     age: number;
     weightKg: number;
@@ -73,10 +74,21 @@ export async function POST(request: Request) {
       );
     }
 
+    const vias = (body.vias ?? [])
+      .filter(
+        (via) =>
+          typeof via?.lat === "number" &&
+          typeof via?.lng === "number" &&
+          Number.isFinite(via.lat) &&
+          Number.isFinite(via.lng),
+      )
+      .slice(0, 8);
+
     const route = await fetchWalkingRoute(
       body.start,
       body.end,
       routePreference,
+      vias,
     );
 
     // Never block the walk plan on Overpass — GraphHopper hazards alone are enough.
@@ -121,6 +133,9 @@ export async function POST(request: Request) {
 
     const preferenceNotes = [
       `Path preference: ${routePreferenceLabel(route.usedPreference)}`,
+      ...(vias.length
+        ? [`Avoidance vias: ${vias.length} waypoint(s) forced into the path`]
+        : []),
       ...(route.fallbackNote ? [route.fallbackNote] : []),
     ];
 

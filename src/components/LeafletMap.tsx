@@ -21,6 +21,7 @@ import {
   paceRoleLabel,
   paceStrokeColor,
 } from "@/lib/pace-style";
+import type { PathHandle, ViaWaypoint } from "@/lib/via-points";
 
 type LeafletMapProps = {
   start: LatLng | null;
@@ -30,8 +31,17 @@ type LeafletMapProps = {
   hazards: RouteHazard[];
   currentPosition: LatLng | null;
   onPickPoint: (point: LatLng) => void;
-  /** When true: no point picking, map interactions frozen, camera fits the route. */
+  /** When true: no start/end picking; camera can still move in pathAdjustMode. */
   locked: boolean;
+  /** Allow pan/zoom + drag handles to dodge blocked roads. */
+  pathAdjustMode: boolean;
+  viaPoints: ViaWaypoint[];
+  pathHandles: PathHandle[];
+  onViaMoved: (viaId: string, location: LatLng) => void;
+  onViaRemoved: (viaId: string) => void;
+  onHandleDropped: (handle: PathHandle, location: LatLng) => void;
+  /** Bump to re-fit the camera to the route. */
+  fitNonce: number;
 };
 
 function ClickHandler({
@@ -56,15 +66,15 @@ function ClickHandler({
 
 function FitRouteBounds({
   routePoints,
-  locked,
+  fitNonce,
 }: {
   routePoints: LatLng[];
-  locked: boolean;
+  fitNonce: number;
 }) {
   const map = useMap();
 
   useEffect(() => {
-    if (!locked || routePoints.length < 2) return;
+    if (!fitNonce || routePoints.length < 2) return;
 
     const bounds = L.latLngBounds(
       routePoints.map((point) => [point.lat, point.lng] as [number, number]),
@@ -74,16 +84,23 @@ function FitRouteBounds({
       maxZoom: 17,
       animate: true,
     });
-  }, [locked, map, routePoints]);
+  }, [fitNonce, map, routePoints]);
 
   return null;
 }
 
-function MapInteractionLock({ locked }: { locked: boolean }) {
+function MapInteractionLock({
+  locked,
+  pathAdjustMode,
+}: {
+  locked: boolean;
+  pathAdjustMode: boolean;
+}) {
   const map = useMap();
+  const freezeMap = locked && !pathAdjustMode;
 
   useEffect(() => {
-    if (locked) {
+    if (freezeMap) {
       map.dragging.disable();
       map.scrollWheelZoom.disable();
       map.doubleClickZoom.disable();
@@ -102,7 +119,7 @@ function MapInteractionLock({ locked }: { locked: boolean }) {
       const container = map.getContainer();
       container.style.cursor = "";
     }
-  }, [locked, map]);
+  }, [freezeMap, map]);
 
   return null;
 }
@@ -166,6 +183,112 @@ function createHazardIcon(kind: OSMHazardKind) {
   });
 }
 
+function createViaIcon() {
+  return L.divIcon({
+    className: "via-icon",
+    html: `
+      <div style="
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #f59e0b;
+        border: 3px solid #fff;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        transform: translate(-50%, -50%);
+        cursor: grab;
+      "></div>
+    `,
+    iconSize: [18, 18],
+    iconAnchor: [0, 0],
+  });
+}
+
+function createHandleIcon() {
+  return L.divIcon({
+    className: "path-handle-icon",
+    html: `
+      <div style="
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        background: rgba(47, 111, 237, 0.9);
+        border: 2px solid #fff;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+        transform: translate(-50%, -50%);
+        cursor: grab;
+      "></div>
+    `,
+    iconSize: [14, 14],
+    iconAnchor: [0, 0],
+  });
+}
+
+function DraggableViaMarker({
+  via,
+  onMoved,
+  onRemoved,
+}: {
+  via: ViaWaypoint;
+  onMoved: (viaId: string, location: LatLng) => void;
+  onRemoved: (viaId: string) => void;
+}) {
+  const icon = useMemo(() => createViaIcon(), []);
+
+  return (
+    <Marker
+      position={[via.location.lat, via.location.lng]}
+      icon={icon}
+      draggable
+      zIndexOffset={800}
+      eventHandlers={{
+        dragend(event) {
+          const marker = event.target as L.Marker;
+          const { lat, lng } = marker.getLatLng();
+          onMoved(via.id, { lat, lng });
+        },
+        dblclick(event) {
+          L.DomEvent.stopPropagation(event);
+          onRemoved(via.id);
+        },
+      }}
+    >
+      <Tooltip direction="top" offset={[0, -10]}>
+        Via — drag to dodge a blockage · double-click to remove
+      </Tooltip>
+    </Marker>
+  );
+}
+
+function DraggableHandleMarker({
+  handle,
+  onDropped,
+}: {
+  handle: PathHandle;
+  onDropped: (handle: PathHandle, location: LatLng) => void;
+}) {
+  const icon = useMemo(() => createHandleIcon(), []);
+
+  return (
+    <Marker
+      position={[handle.location.lat, handle.location.lng]}
+      icon={icon}
+      draggable
+      zIndexOffset={700}
+      eventHandlers={{
+        dragend(event) {
+          const marker = event.target as L.Marker;
+          const { lat, lng } = marker.getLatLng();
+          onDropped(handle, { lat, lng });
+        },
+      }}
+    >
+      <Tooltip direction="top" offset={[0, -8]}>
+        Drag off the blocked road to reroute
+      </Tooltip>
+    </Marker>
+  );
+}
+
 export function LeafletMap({
   start,
   end,
@@ -175,6 +298,13 @@ export function LeafletMap({
   currentPosition,
   onPickPoint,
   locked,
+  pathAdjustMode,
+  viaPoints,
+  pathHandles,
+  onViaMoved,
+  onViaRemoved,
+  onHandleDropped,
+  fitNonce,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -237,8 +367,8 @@ export function LeafletMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <MapInteractionLock locked={locked} />
-      <FitRouteBounds routePoints={routePoints} locked={locked} />
+      <MapInteractionLock locked={locked} pathAdjustMode={pathAdjustMode} />
+      <FitRouteBounds routePoints={routePoints} fitNonce={fitNonce} />
       <ClickHandler onPickPoint={onPickPoint} enabled={!locked} />
 
       {segmentSpeedPlan && segmentSpeedPlan.length && routePoints.length > 2
@@ -313,6 +443,27 @@ export function LeafletMap({
           zIndexOffset={500}
         />
       ))}
+
+      {pathAdjustMode
+        ? pathHandles.map((handle) => (
+            <DraggableHandleMarker
+              key={handle.id}
+              handle={handle}
+              onDropped={onHandleDropped}
+            />
+          ))
+        : null}
+
+      {pathAdjustMode
+        ? viaPoints.map((via) => (
+            <DraggableViaMarker
+              key={via.id}
+              via={via}
+              onMoved={onViaMoved}
+              onRemoved={onViaRemoved}
+            />
+          ))
+        : null}
 
       {start ? (
         <CircleMarker center={[start.lat, start.lng]} radius={9} pathOptions={{ color: "#16a34a" }}>
