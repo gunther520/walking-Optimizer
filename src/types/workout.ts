@@ -9,6 +9,9 @@ export type WorkoutLevel = "beginner" | "intermediate" | "advanced";
 /** How aggressively long routes ease average bpm. */
 export type EffortPreference = "conserve" | "balanced" | "challenge";
 
+/** How GraphHopper should choose the walking path. */
+export type RoutePreference = "default" | "avoid_stairs" | "prefer_flat";
+
 export type WorkoutProfile = {
   age: number;
   weightKg: number;
@@ -17,6 +20,7 @@ export type WorkoutProfile = {
   minSpeedMps: number;
   maxSpeedMps: number;
   effortPreference?: EffortPreference;
+  routePreference?: RoutePreference;
 };
 
 export type RouteSegment = {

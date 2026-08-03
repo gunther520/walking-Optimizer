@@ -1,4 +1,4 @@
-import type { EffortPreference, LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
+import type { EffortPreference, LatLng, RoutePlan, RoutePreference, WorkoutLevel } from "@/types/workout";
 
 export type StoredPlannerForm = {
   age: number;
@@ -8,6 +8,7 @@ export type StoredPlannerForm = {
   minSpeedMps: number;
   maxSpeedMps: number;
   effortPreference: EffortPreference;
+  routePreference: RoutePreference;
 };
 
 export type StoredPlannerState = {

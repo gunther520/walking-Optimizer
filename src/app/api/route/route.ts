@@ -2,13 +2,18 @@ import { NextResponse } from "next/server";
 
 import { fetchWalkingRoute } from "@/lib/graphhopper";
 import { buildRoutePlan } from "@/lib/optimizer";
+import { routePreferenceLabel } from "@/lib/route-preference";
 import { getDefaultSpeedBounds } from "@/lib/training";
 import {
   dedupeHazards,
   filterHazardsOnPath,
   findOSMHazardsAlongRoute,
 } from "@/lib/osm-hazards";
-import type { WorkoutLevel, WorkoutProfile } from "@/types/workout";
+import type {
+  RoutePreference,
+  WorkoutLevel,
+  WorkoutProfile,
+} from "@/types/workout";
 
 type RouteRequestBody = {
   start: { lat: number; lng: number };
@@ -21,8 +26,20 @@ type RouteRequestBody = {
     minSpeedMps?: number;
     maxSpeedMps?: number;
     effortPreference?: "conserve" | "balanced" | "challenge";
+    routePreference?: RoutePreference;
   };
 };
+
+function parseRoutePreference(value: unknown): RoutePreference {
+  if (
+    value === "default" ||
+    value === "avoid_stairs" ||
+    value === "prefer_flat"
+  ) {
+    return value;
+  }
+  return "default";
+}
 
 export async function POST(request: Request) {
   try {
@@ -36,6 +53,7 @@ export async function POST(request: Request) {
       preference === "challenge"
         ? preference
         : "balanced";
+    const routePreference = parseRoutePreference(body.profile.routePreference);
 
     const profile: WorkoutProfile = {
       age: Number(body.profile.age),
@@ -45,6 +63,7 @@ export async function POST(request: Request) {
       minSpeedMps: Number(body.profile.minSpeedMps ?? defaults.minSpeedMps),
       maxSpeedMps: Number(body.profile.maxSpeedMps ?? defaults.maxSpeedMps),
       effortPreference,
+      routePreference,
     };
 
     if (!body.start || !body.end) {
@@ -54,7 +73,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const route = await fetchWalkingRoute(body.start, body.end);
+    const route = await fetchWalkingRoute(
+      body.start,
+      body.end,
+      routePreference,
+    );
 
     // Never block the walk plan on Overpass — GraphHopper hazards alone are enough.
     const osmTimedOut = {
@@ -96,9 +119,19 @@ export async function POST(request: Request) {
           }. Plan still built with GraphHopper on-path stairs.`,
         ];
 
+    const preferenceNotes = [
+      `Path preference: ${routePreferenceLabel(route.usedPreference)}`,
+      ...(route.fallbackNote ? [route.fallbackNote] : []),
+    ];
+
     return NextResponse.json({
       ...plan,
-      instructionSummary: [...degradedNote, ...plan.instructionSummary],
+      usedRoutePreference: route.usedPreference,
+      instructionSummary: [
+        ...preferenceNotes,
+        ...degradedNote,
+        ...plan.instructionSummary,
+      ],
       hazardDebug: {
         graphHopperCount: route.routeHazards.length,
         osmRawCount: osm.debug.rawOsmCount,

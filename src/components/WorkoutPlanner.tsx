@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
+import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import {
   clearPlannerState,
@@ -19,7 +20,13 @@ import {
   metsFromVo2,
   vo2FromSpeedAndGrade,
 } from "@/lib/training";
-import type { EffortPreference, LatLng, RoutePlan, WorkoutLevel } from "@/types/workout";
+import type {
+  EffortPreference,
+  LatLng,
+  RoutePlan,
+  RoutePreference,
+  WorkoutLevel,
+} from "@/types/workout";
 
 import styles from "@/app/page.module.css";
 
@@ -38,6 +45,7 @@ type PlannerFormState = {
   minSpeedMps: number;
   maxSpeedMps: number;
   effortPreference: EffortPreference;
+  routePreference: RoutePreference;
 };
 
 type LiveStats = {
@@ -57,6 +65,7 @@ const DEFAULT_FORM: PlannerFormState = {
   minSpeedMps: 1,
   maxSpeedMps: 1.75,
   effortPreference: "balanced",
+  routePreference: "default",
 };
 
 function readClientMounted() {
@@ -90,6 +99,7 @@ function createInitialFromStorage() {
       ...DEFAULT_FORM,
       ...stored.form,
       effortPreference: stored.form.effortPreference ?? "balanced",
+      routePreference: stored.form.routePreference ?? "default",
     },
     start: stored.start,
     end: stored.end,
@@ -465,6 +475,27 @@ function WorkoutPlannerClient() {
             </div>
 
             <label className={styles.field}>
+              <span>Path preference</span>
+              <select
+                value={form.routePreference}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    routePreference: event.target.value as RoutePreference,
+                  }))
+                }
+              >
+                <option value="default">Fastest walking route</option>
+                <option value="avoid_stairs">Avoid stairs</option>
+                <option value="prefer_flat">Prefer flatter paths</option>
+              </select>
+            </label>
+            <p className={styles.cardText}>
+              {routePreferenceLabel(form.routePreference)}. Rebuild after changing —
+              GraphHopper may fall back to default if a preference is unsupported.
+            </p>
+
+            <label className={styles.field}>
               <span>Long-route effort</span>
               <select
                 value={form.effortPreference}
@@ -544,6 +575,7 @@ function WorkoutPlannerClient() {
             <ol className={styles.steps}>
               <li>Click the map once to set a start point.</li>
               <li>Click a second time to set the destination.</li>
+              <li>Choose path preference (fastest / avoid stairs / flatter).</li>
               <li>Build the route — the map locks and focuses on the path.</li>
               <li>Press “Change start & end” to unlock and pick new points.</li>
               <li>Optionally enable GPS for live pace guidance on the path.</li>
