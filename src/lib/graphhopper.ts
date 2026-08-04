@@ -42,6 +42,40 @@ export function buildLocationWindows(
   return windows;
 }
 
+/** ~1.1 m — stable keys when GraphHopper snaps markers slightly. */
+function roundCoord(value: number) {
+  return Math.round(value * 1e5) / 1e5;
+}
+
+function formatStop(point: LatLng) {
+  return `${roundCoord(point.lat)},${roundCoord(point.lng)}`;
+}
+
+/**
+ * Cache key for one GraphHopper window. Unchanged windows (e.g. second half of a
+ * two-chunk route when only an early via moved) reuse the previous response.
+ */
+export function buildLegCacheKey(
+  stops: LatLng[],
+  from: number,
+  to: number,
+  preference: RoutePreference,
+  maxLocationsPerRequest: number,
+) {
+  const windowStops = stops.slice(from, to + 1);
+  return [
+    preference,
+    maxLocationsPerRequest,
+    ...windowStops.map(formatStop),
+  ].join("|");
+}
+
+export type RouteChunkStats = {
+  windows: number;
+  fetched: number;
+  cached: number;
+};
+
 function isLocationLimitError(error: unknown) {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   return (
@@ -80,6 +114,42 @@ type ParsedRoute = {
   routeHazards: RouteHazard[];
   snappedVias: LatLng[];
 };
+
+type CachedLeg = {
+  route: ParsedRoute;
+  usedPreference: RoutePreference;
+  fallbackNote?: string;
+};
+
+const LEG_CACHE_MAX = 64;
+const legCache = new Map<string, CachedLeg>();
+
+export function clearGraphHopperLegCache() {
+  legCache.clear();
+}
+
+export function getGraphHopperLegCacheSize() {
+  return legCache.size;
+}
+
+function readLegCache(key: string): CachedLeg | undefined {
+  const hit = legCache.get(key);
+  if (!hit) return undefined;
+  // Refresh LRU order.
+  legCache.delete(key);
+  legCache.set(key, hit);
+  return hit;
+}
+
+function writeLegCache(key: string, value: CachedLeg) {
+  if (legCache.has(key)) legCache.delete(key);
+  legCache.set(key, value);
+  while (legCache.size > LEG_CACHE_MAX) {
+    const oldest = legCache.keys().next().value;
+    if (oldest == null) break;
+    legCache.delete(oldest);
+  }
+}
 
 function midLocation(points: LatLng[], from: number, to: number) {
   const mid = Math.min(
@@ -254,6 +324,9 @@ async function requestRouteOnce(
  * Chain GraphHopper requests so we stay within max locations/request (free = 5).
  * Windows overlap on the junction point; path geometry is stitched afterward.
  * Use maxLocationsPerRequest=2 to force every via as a hard leg endpoint.
+ *
+ * Unchanged windows are served from an in-memory LRU cache so a via tweak that
+ * only affects one of two composed path chunks costs one API call, not two.
  */
 async function requestRouteChunked(
   apiKey: string,
@@ -266,6 +339,7 @@ async function requestRouteChunked(
   route: ParsedRoute;
   usedPreference: RoutePreference;
   fallbackNote?: string;
+  chunkStats: RouteChunkStats;
 }> {
   const stops = [start, ...vias, end];
   const windows = buildLocationWindows(stops.length, maxLocationsPerRequest);
@@ -275,6 +349,8 @@ async function requestRouteChunked(
   const snappedByStopIndex = new Map<number, LatLng>();
   let usedPreference: RoutePreference = preference;
   let fallbackNote: string | undefined;
+  let fetched = 0;
+  let cached = 0;
 
   for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
     const { from, to } = windows[windowIndex];
@@ -282,14 +358,29 @@ async function requestRouteChunked(
     const windowStart = windowStops[0];
     const windowEnd = windowStops[windowStops.length - 1];
     const windowVias = windowStops.slice(1, -1);
-
-    const leg = await requestRouteOnce(
-      apiKey,
-      windowStart,
-      windowEnd,
+    const cacheKey = buildLegCacheKey(
+      stops,
+      from,
+      to,
       preference,
-      windowVias,
+      maxLocationsPerRequest,
     );
+
+    let leg = readLegCache(cacheKey);
+    if (leg) {
+      cached += 1;
+    } else {
+      leg = await requestRouteOnce(
+        apiKey,
+        windowStart,
+        windowEnd,
+        preference,
+        windowVias,
+      );
+      writeLegCache(cacheKey, leg);
+      fetched += 1;
+    }
+
     usedPreference = leg.usedPreference;
     if (leg.fallbackNote) fallbackNote = leg.fallbackNote;
 
@@ -341,7 +432,32 @@ async function requestRouteChunked(
     },
     usedPreference,
     fallbackNote,
+    chunkStats: {
+      windows: windows.length,
+      fetched,
+      cached,
+    },
   };
+}
+
+function mergeChunkStats(
+  current: RouteChunkStats | undefined,
+  next: RouteChunkStats,
+): RouteChunkStats {
+  if (!current) return next;
+  return {
+    windows: current.windows + next.windows,
+    fetched: current.fetched + next.fetched,
+    cached: current.cached + next.cached,
+  };
+}
+
+function chunkStatsNote(stats: RouteChunkStats | undefined) {
+  if (!stats || stats.windows < 2) return undefined;
+  if (stats.cached <= 0) {
+    return `Fetched ${stats.fetched}/${stats.windows} path chunk(s) from GraphHopper.`;
+  }
+  return `Reused ${stats.cached} unchanged path chunk(s); fetched ${stats.fetched}.`;
 }
 
 export async function fetchWalkingRoute(
@@ -362,32 +478,11 @@ export async function fetchWalkingRoute(
   let route: ParsedRoute;
   let usedPreference: RoutePreference;
   let fallbackNote: string | undefined;
+  let chunkStats: RouteChunkStats | undefined;
 
   if (mustChunk) {
-    ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
-      apiKey,
-      start,
-      end,
-      preference,
-      vias,
-      GRAPHHOPPER_FREE_MAX_LOCATIONS,
-    ));
-    const chunkNote = `Split ${vias.length} vias across chained GraphHopper requests (free tier allows ${GRAPHHOPPER_FREE_MAX_LOCATIONS} locations each).`;
-    fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
-  } else {
-    try {
-      ({ route, usedPreference, fallbackNote } = await requestRouteOnce(
-        apiKey,
-        start,
-        end,
-        preference,
-        vias,
-      ));
-    } catch (error) {
-      if (!isLocationLimitError(error) || vias.length === 0) {
-        throw error;
-      }
-      ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
+    ({ route, usedPreference, fallbackNote, chunkStats } =
+      await requestRouteChunked(
         apiKey,
         start,
         end,
@@ -395,9 +490,54 @@ export async function fetchWalkingRoute(
         vias,
         GRAPHHOPPER_FREE_MAX_LOCATIONS,
       ));
-      const chunkNote =
-        "GraphHopper location limit hit; rebuilt with chained free-tier-safe requests.";
-      fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
+    const chunkNote = `Split ${vias.length} vias across chained GraphHopper requests (free tier allows ${GRAPHHOPPER_FREE_MAX_LOCATIONS} locations each).`;
+    fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
+  } else {
+    const stops = [start, ...vias, end];
+    const fullKey = buildLegCacheKey(
+      stops,
+      0,
+      stops.length - 1,
+      preference,
+      GRAPHHOPPER_FREE_MAX_LOCATIONS,
+    );
+    const cachedFull = readLegCache(fullKey);
+    if (cachedFull) {
+      route = cachedFull.route;
+      usedPreference = cachedFull.usedPreference;
+      fallbackNote = cachedFull.fallbackNote;
+      chunkStats = { windows: 1, fetched: 0, cached: 1 };
+    } else {
+      try {
+        const once = await requestRouteOnce(
+          apiKey,
+          start,
+          end,
+          preference,
+          vias,
+        );
+        writeLegCache(fullKey, once);
+        route = once.route;
+        usedPreference = once.usedPreference;
+        fallbackNote = once.fallbackNote;
+        chunkStats = { windows: 1, fetched: 1, cached: 0 };
+      } catch (error) {
+        if (!isLocationLimitError(error) || vias.length === 0) {
+          throw error;
+        }
+        ({ route, usedPreference, fallbackNote, chunkStats } =
+          await requestRouteChunked(
+            apiKey,
+            start,
+            end,
+            preference,
+            vias,
+            GRAPHHOPPER_FREE_MAX_LOCATIONS,
+          ));
+        const chunkNote =
+          "GraphHopper location limit hit; rebuilt with chained free-tier-safe requests.";
+        fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
+      }
     }
   }
 
@@ -406,18 +546,30 @@ export async function fetchWalkingRoute(
   if (vias.length > 0) {
     const neglected = findNeglectedViaIndices(vias, route.segments);
     if (neglected.length > 0) {
-      ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
+      const forced = await requestRouteChunked(
         apiKey,
         start,
         end,
         preference,
         vias,
         2,
-      ));
+      );
+      route = forced.route;
+      usedPreference = forced.usedPreference;
+      chunkStats = mergeChunkStats(chunkStats, forced.chunkStats);
       const chainNote =
         "Rebuilt leg-by-leg so every avoidance via is on the walking path.";
-      fallbackNote = fallbackNote ? `${fallbackNote} ${chainNote}` : chainNote;
+      fallbackNote = forced.fallbackNote
+        ? `${forced.fallbackNote} ${chainNote}`
+        : fallbackNote
+          ? `${fallbackNote} ${chainNote}`
+          : chainNote;
     }
+  }
+
+  const reuseNote = chunkStatsNote(chunkStats);
+  if (reuseNote) {
+    fallbackNote = fallbackNote ? `${fallbackNote} ${reuseNote}` : reuseNote;
   }
 
   return {
@@ -428,5 +580,6 @@ export async function fetchWalkingRoute(
     snappedVias: route.snappedVias,
     usedPreference,
     fallbackNote,
+    chunkStats,
   };
 }

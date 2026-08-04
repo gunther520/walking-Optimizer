@@ -141,6 +141,11 @@ export async function POST(request: Request) {
                 : ""),
           ]
         : []),
+      ...(route.chunkStats && route.chunkStats.cached > 0
+        ? [
+            `GraphHopper: reused ${route.chunkStats.cached} unchanged path chunk(s), fetched ${route.chunkStats.fetched}.`,
+          ]
+        : []),
       ...(route.fallbackNote ? [route.fallbackNote] : []),
     ];
 
@@ -148,6 +153,7 @@ export async function POST(request: Request) {
       ...plan,
       usedRoutePreference: route.usedPreference,
       snappedVias: route.snappedVias,
+      chunkStats: route.chunkStats,
       instructionSummary: [
         ...preferenceNotes,
         ...degradedNote,
