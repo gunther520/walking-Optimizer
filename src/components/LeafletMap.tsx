@@ -171,17 +171,23 @@ function createHandleIcon() {
     className: "path-handle-icon",
     html: `
       <div style="
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        background: #2455d6;
+        width: 22px;
+        height: 22px;
+        border-radius: 5px;
+        background: #1d4ed8;
         border: 3px solid #fff;
-        box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+        box-shadow: 0 1px 6px rgba(0,0,0,0.5);
         transform: translate(-50%, -50%);
         cursor: grab;
-      "></div>
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+      ">⋮⋮</div>
     `,
-    iconSize: [18, 18],
+    iconSize: [22, 22],
     iconAnchor: [0, 0],
   });
 }

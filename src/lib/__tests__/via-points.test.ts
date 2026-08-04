@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildSegments, haversineDistance } from "@/lib/route-math";
 import {
+  buildCumulativeDistances,
   buildPathHandles,
   pointAtDistanceAlongRoute,
   sortViasAlongRoute,
@@ -12,7 +13,6 @@ import {
 import type { LatLng, RoutePlan } from "@/types/workout";
 
 function makeLinePlan(metersRough: number): RoutePlan {
-  // ~11.1 m per 0.0001 deg latitude
   const steps = Math.max(4, Math.ceil(metersRough / 11.1));
   const points: LatLng[] = [];
   for (let i = 0; i <= steps; i += 1) {
@@ -34,32 +34,7 @@ function makeLinePlan(metersRough: number): RoutePlan {
       estimatedMets: 4,
       paceRole: "steady",
     })),
-    paceBlocks: [
-      {
-        index: 0,
-        paceRole: "push",
-        startSegmentIndex: 0,
-        endSegmentIndex: Math.floor(segments.length / 2),
-        distanceMeters: totalDistanceMeters * 0.5,
-        durationSeconds: 180,
-        avgSpeedMps: 1.4,
-        avgHr: 140,
-        targetHr: 140,
-        zoneLabel: "Zone 2",
-      },
-      {
-        index: 1,
-        paceRole: "steady",
-        startSegmentIndex: Math.floor(segments.length / 2) + 1,
-        endSegmentIndex: segments.length - 1,
-        distanceMeters: totalDistanceMeters * 0.5,
-        durationSeconds: 60,
-        avgSpeedMps: 1.2,
-        avgHr: 110,
-        targetHr: 110,
-        zoneLabel: "low Zone 2",
-      },
-    ],
+    paceBlocks: [],
     zoneBand: {
       minFraction: 0.5,
       maxFraction: 0.75,
@@ -75,30 +50,40 @@ function makeLinePlan(metersRough: number): RoutePlan {
 }
 
 describe("via points", () => {
-  it("spaces handles evenly along the full route", () => {
-    const plan = makeLinePlan(2000);
+  it("covers both halves even when totalDistanceMeters is wrongly short", () => {
+    const plan = makeLinePlan(3000);
+    // Simulate a stale/wrong summary distance (old bug source).
+    plan.totalDistanceMeters = plan.totalDistanceMeters * 0.4;
+
+    const handles = buildPathHandles(plan, []);
+    expect(handles.length).toBeGreaterThanOrEqual(5);
+
+    const { totalMeters } = buildCumulativeDistances(plan.segments);
+    const mid = totalMeters / 2;
+    const firstHalf = handles.filter((handle) => handle.alongMeters < mid);
+    const secondHalf = handles.filter((handle) => handle.alongMeters >= mid);
+
+    expect(firstHalf.length).toBeGreaterThan(0);
+    expect(secondHalf.length).toBeGreaterThan(0);
+    expect(Math.abs(firstHalf.length - secondHalf.length)).toBeLessThanOrEqual(2);
+
+    // Last handle should be well into the second half of the true geometry.
+    const last = handles[handles.length - 1];
+    expect(last.alongMeters).toBeGreaterThan(totalMeters * 0.7);
+  });
+
+  it("keeps neighbor spacing from clustering", () => {
+    const plan = makeLinePlan(2500);
     const handles = buildPathHandles(plan, []);
     expect(handles.length).toBeGreaterThanOrEqual(4);
 
-    const firstHalf = handles.filter(
-      (handle) => handle.segmentIndex < plan.segments.length / 2,
-    );
-    const secondHalf = handles.filter(
-      (handle) => handle.segmentIndex >= plan.segments.length / 2,
-    );
-    expect(secondHalf.length).toBeGreaterThan(0);
-    expect(Math.abs(firstHalf.length - secondHalf.length)).toBeLessThanOrEqual(
-      2,
-    );
-
-    // Neighbor spacing should stay roughly consistent (not piled at the start).
-    const gaps: number[] = [];
     for (let i = 1; i < handles.length; i += 1) {
-      gaps.push(haversineDistance(handles[i - 1].location, handles[i].location));
+      const gap = haversineDistance(
+        handles[i - 1].location,
+        handles[i].location,
+      );
+      expect(gap).toBeGreaterThan(120);
     }
-    const avg = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
-    expect(avg).toBeGreaterThan(150);
-    expect(avg).toBeLessThan(350);
   });
 
   it("skips handles near existing vias", () => {

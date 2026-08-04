@@ -11,14 +11,18 @@ export type PathHandle = {
   location: LatLng;
   /** Densified segment index near this handle — used to order new vias. */
   segmentIndex: number;
+  /** Distance from route start along the polyline. */
+  alongMeters: number;
 };
 
 /** Target spacing between blue drag handles along the route. */
-const HANDLE_SPACING_METERS = 240;
+const HANDLE_SPACING_METERS = 280;
 /** Keep handles away from start/end endpoints. */
-const END_MARGIN_METERS = 90;
+const END_MARGIN_METERS = 120;
 /** Skip a handle if an avoidance via is already nearby. */
-const VIA_CLEARANCE_METERS = 50;
+const VIA_CLEARANCE_METERS = 55;
+/** Soft cap so phones stay usable on very long walks. */
+const MAX_HANDLES = 18;
 
 function createId() {
   return `via-${Math.random().toString(36).slice(2, 10)}`;
@@ -41,36 +45,56 @@ function interpolateOnSegment(segment: RouteSegment, t: number): LatLng {
   };
 }
 
+/** Cumulative distances: offsets[i] = meters from start to segments[i].start */
+export function buildCumulativeDistances(segments: RouteSegment[]) {
+  const offsets: number[] = [];
+  let walked = 0;
+  for (const segment of segments) {
+    offsets.push(walked);
+    walked += Math.max(0, segment.distanceMeters);
+  }
+  return { offsets, totalMeters: walked };
+}
+
 /**
  * Point at a given distance along the polyline (meters from start).
- * Returns null if the distance is outside the route.
+ * Uses real cumulative segment length — never trusts plan.totalDistanceMeters alone.
  */
 export function pointAtDistanceAlongRoute(
   segments: RouteSegment[],
   targetMeters: number,
-): { location: LatLng; segmentIndex: number } | null {
+  precomputed?: { offsets: number[]; totalMeters: number },
+): { location: LatLng; segmentIndex: number; alongMeters: number } | null {
   if (!segments.length || targetMeters < 0) return null;
 
-  let walked = 0;
-  for (const segment of segments) {
-    const next = walked + segment.distanceMeters;
-    if (targetMeters <= next || segment.index === segments.length - 1) {
-      const span = Math.max(segment.distanceMeters, 1e-6);
-      const t = Math.min(1, Math.max(0, (targetMeters - walked) / span));
-      return {
-        location: interpolateOnSegment(segment, t),
-        segmentIndex: segment.index,
-      };
-    }
-    walked = next;
+  const { offsets, totalMeters } =
+    precomputed ?? buildCumulativeDistances(segments);
+  if (totalMeters <= 0) return null;
+
+  const clamped = Math.min(targetMeters, totalMeters);
+  // Find last offset <= clamped
+  let lo = 0;
+  let hi = offsets.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (offsets[mid] <= clamped) lo = mid;
+    else hi = mid - 1;
   }
 
-  return null;
+  const segment = segments[lo];
+  const span = Math.max(segment.distanceMeters, 1e-6);
+  const t = Math.min(1, Math.max(0, (clamped - offsets[lo]) / span));
+
+  return {
+    location: interpolateOnSegment(segment, t),
+    segmentIndex: segment.index,
+    alongMeters: clamped,
+  };
 }
 
 /**
- * Place drag handles evenly along the full path (not clustered at the start).
- * A bit less dense: about one handle every ~240 m, inset from start/end.
+ * Place drag handles evenly along the FULL polyline length.
+ * Spacing ~280 m, inset from endpoints, covering start→end (not only the first half).
  */
 export function buildPathHandles(
   plan: RoutePlan,
@@ -78,39 +102,51 @@ export function buildPathHandles(
 ): PathHandle[] {
   if (plan.points.length < 2 || !plan.segments.length) return [];
 
-  const total =
-    plan.totalDistanceMeters ||
-    plan.segments.reduce((sum, segment) => sum + segment.distanceMeters, 0);
+  // Always measure the geometry we render — ignore a stale/wrong totalDistanceMeters.
+  const cumulative = buildCumulativeDistances(plan.segments);
+  const total = cumulative.totalMeters;
+  if (total <= 0) return [];
 
-  if (total < END_MARGIN_METERS * 2 + 40) {
-    // Very short route: one middle handle if clear of vias.
-    const mid = pointAtDistanceAlongRoute(plan.segments, total / 2);
+  if (total < END_MARGIN_METERS * 2 + 50) {
+    const mid = pointAtDistanceAlongRoute(plan.segments, total / 2, cumulative);
     if (!mid || isNearExistingVia(mid.location, viaPoints)) return [];
     return [
       {
         id: `handle-mid-${mid.segmentIndex}`,
         location: mid.location,
         segmentIndex: mid.segmentIndex,
+        alongMeters: mid.alongMeters,
       },
     ];
   }
 
   const usable = total - END_MARGIN_METERS * 2;
-  const count = Math.max(1, Math.round(usable / HANDLE_SPACING_METERS));
-  const step = usable / count;
+  const count = Math.min(
+    MAX_HANDLES,
+    Math.max(1, Math.round(usable / HANDLE_SPACING_METERS)),
+  );
 
   const handles: PathHandle[] = [];
 
   for (let i = 0; i < count; i += 1) {
-    const at = END_MARGIN_METERS + step * (i + 0.5);
-    const hit = pointAtDistanceAlongRoute(plan.segments, at);
+    // Equal fractions across the usable middle of the route.
+    const fraction = (i + 1) / (count + 1);
+    const at = END_MARGIN_METERS + usable * fraction;
+    const hit = pointAtDistanceAlongRoute(plan.segments, at, cumulative);
     if (!hit) continue;
     if (isNearExistingVia(hit.location, viaPoints)) continue;
 
+    // Skip if too close to the previous accepted handle.
+    const prev = handles[handles.length - 1];
+    if (prev && hit.alongMeters - prev.alongMeters < HANDLE_SPACING_METERS * 0.55) {
+      continue;
+    }
+
     handles.push({
-      id: `handle-${i}-${hit.segmentIndex}`,
+      id: `handle-${i}-s${hit.segmentIndex}-m${Math.round(hit.alongMeters)}`,
       location: hit.location,
       segmentIndex: hit.segmentIndex,
+      alongMeters: hit.alongMeters,
     });
   }
 

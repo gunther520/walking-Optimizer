@@ -759,7 +759,9 @@ function WorkoutPlannerClient() {
             />
             {routePlan ? (
               <div className={styles.mapPathOverlay}>
-                <strong>Drag blue squares to avoid a blocked road</strong>
+                <strong>
+                  Drag blue handles to avoid a blocked road ({pathHandles.length} along path)
+                </strong>
                 <span>
                   Orange circles are vias. Double-click a via to remove it.
                   {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
