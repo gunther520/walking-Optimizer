@@ -31,10 +31,8 @@ type LeafletMapProps = {
   hazards: RouteHazard[];
   currentPosition: LatLng | null;
   onPickPoint: (point: LatLng) => void;
-  /** When true: no start/end picking; camera can still move in pathAdjustMode. */
-  locked: boolean;
-  /** Allow pan/zoom + drag handles to dodge blocked roads. */
-  pathAdjustMode: boolean;
+  /** When true, map clicks set start/end. When false, clicks won't change endpoints. */
+  pickingEnabled: boolean;
   viaPoints: ViaWaypoint[];
   pathHandles: PathHandle[];
   onViaMoved: (viaId: string, location: LatLng) => void;
@@ -85,41 +83,6 @@ function FitRouteBounds({
       animate: true,
     });
   }, [fitNonce, map, routePoints]);
-
-  return null;
-}
-
-function MapInteractionLock({
-  locked,
-  pathAdjustMode,
-}: {
-  locked: boolean;
-  pathAdjustMode: boolean;
-}) {
-  const map = useMap();
-  const freezeMap = locked && !pathAdjustMode;
-
-  useEffect(() => {
-    if (freezeMap) {
-      map.dragging.disable();
-      map.scrollWheelZoom.disable();
-      map.doubleClickZoom.disable();
-      map.boxZoom.disable();
-      map.keyboard.disable();
-      map.touchZoom.disable();
-      const container = map.getContainer();
-      container.style.cursor = "default";
-    } else {
-      map.dragging.enable();
-      map.scrollWheelZoom.enable();
-      map.doubleClickZoom.enable();
-      map.boxZoom.enable();
-      map.keyboard.enable();
-      map.touchZoom.enable();
-      const container = map.getContainer();
-      container.style.cursor = "";
-    }
-  }, [freezeMap, map]);
 
   return null;
 }
@@ -188,17 +151,17 @@ function createViaIcon() {
     className: "via-icon",
     html: `
       <div style="
-        width: 18px;
-        height: 18px;
+        width: 22px;
+        height: 22px;
         border-radius: 50%;
         background: #f59e0b;
         border: 3px solid #fff;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        box-shadow: 0 1px 5px rgba(0,0,0,0.45);
         transform: translate(-50%, -50%);
         cursor: grab;
       "></div>
     `,
-    iconSize: [18, 18],
+    iconSize: [22, 22],
     iconAnchor: [0, 0],
   });
 }
@@ -208,17 +171,17 @@ function createHandleIcon() {
     className: "path-handle-icon",
     html: `
       <div style="
-        width: 14px;
-        height: 14px;
-        border-radius: 3px;
-        background: rgba(47, 111, 237, 0.9);
-        border: 2px solid #fff;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        background: #2455d6;
+        border: 3px solid #fff;
+        box-shadow: 0 1px 5px rgba(0,0,0,0.45);
         transform: translate(-50%, -50%);
         cursor: grab;
       "></div>
     `,
-    iconSize: [14, 14],
+    iconSize: [18, 18],
     iconAnchor: [0, 0],
   });
 }
@@ -232,6 +195,7 @@ function DraggableViaMarker({
   onMoved: (viaId: string, location: LatLng) => void;
   onRemoved: (viaId: string) => void;
 }) {
+  const map = useMap();
   const icon = useMemo(() => createViaIcon(), []);
 
   return (
@@ -241,7 +205,11 @@ function DraggableViaMarker({
       draggable
       zIndexOffset={800}
       eventHandlers={{
+        dragstart() {
+          map.dragging.disable();
+        },
         dragend(event) {
+          map.dragging.enable();
           const marker = event.target as L.Marker;
           const { lat, lng } = marker.getLatLng();
           onMoved(via.id, { lat, lng });
@@ -266,6 +234,7 @@ function DraggableHandleMarker({
   handle: PathHandle;
   onDropped: (handle: PathHandle, location: LatLng) => void;
 }) {
+  const map = useMap();
   const icon = useMemo(() => createHandleIcon(), []);
 
   return (
@@ -275,7 +244,11 @@ function DraggableHandleMarker({
       draggable
       zIndexOffset={700}
       eventHandlers={{
+        dragstart() {
+          map.dragging.disable();
+        },
         dragend(event) {
+          map.dragging.enable();
           const marker = event.target as L.Marker;
           const { lat, lng } = marker.getLatLng();
           onDropped(handle, { lat, lng });
@@ -297,8 +270,7 @@ export function LeafletMap({
   hazards,
   currentPosition,
   onPickPoint,
-  locked,
-  pathAdjustMode,
+  pickingEnabled,
   viaPoints,
   pathHandles,
   onViaMoved,
@@ -367,9 +339,8 @@ export function LeafletMap({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <MapInteractionLock locked={locked} pathAdjustMode={pathAdjustMode} />
       <FitRouteBounds routePoints={routePoints} fitNonce={fitNonce} />
-      <ClickHandler onPickPoint={onPickPoint} enabled={!locked} />
+      <ClickHandler onPickPoint={onPickPoint} enabled={pickingEnabled} />
 
       {segmentSpeedPlan && segmentSpeedPlan.length && routePoints.length > 2
         ? (() => {
@@ -444,26 +415,22 @@ export function LeafletMap({
         />
       ))}
 
-      {pathAdjustMode
-        ? pathHandles.map((handle) => (
-            <DraggableHandleMarker
-              key={handle.id}
-              handle={handle}
-              onDropped={onHandleDropped}
-            />
-          ))
-        : null}
+      {pathHandles.map((handle) => (
+        <DraggableHandleMarker
+          key={handle.id}
+          handle={handle}
+          onDropped={onHandleDropped}
+        />
+      ))}
 
-      {pathAdjustMode
-        ? viaPoints.map((via) => (
-            <DraggableViaMarker
-              key={via.id}
-              via={via}
-              onMoved={onViaMoved}
-              onRemoved={onViaRemoved}
-            />
-          ))
-        : null}
+      {viaPoints.map((via) => (
+        <DraggableViaMarker
+          key={via.id}
+          via={via}
+          onMoved={onViaMoved}
+          onRemoved={onViaRemoved}
+        />
+      ))}
 
       {start ? (
         <CircleMarker center={[start.lat, start.lng]} radius={9} pathOptions={{ color: "#16a34a" }}>

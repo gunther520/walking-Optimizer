@@ -17,17 +17,37 @@ function createId() {
   return `via-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Place drag handles near the middle of each pace block (user-facing segment). */
+function isNearExistingVia(point: LatLng, viaPoints: ViaWaypoint[], meters = 40) {
+  return viaPoints.some((via) => haversineDistance(via.location, point) < meters);
+}
+
+/** Place drag handles along the path so users can dodge blocked roads. */
 export function buildPathHandles(
   plan: RoutePlan,
   viaPoints: ViaWaypoint[],
 ): PathHandle[] {
-  const blocks = plan.paceBlocks ?? [];
-  if (!blocks.length || plan.points.length < 2) return [];
+  if (plan.points.length < 2 || !plan.segments.length) return [];
 
   const handles: PathHandle[] = [];
+  const seenSeg = new Set<number>();
 
-  for (const block of blocks) {
+  function pushHandle(segmentIndex: number, location: LatLng, id: string) {
+    const clamped = Math.max(
+      0,
+      Math.min(segmentIndex, plan.segments.length - 1),
+    );
+    if (seenSeg.has(clamped)) return;
+    if (isNearExistingVia(location, viaPoints)) return;
+    seenSeg.add(clamped);
+    handles.push({
+      id,
+      location: { lat: location.lat, lng: location.lng },
+      segmentIndex: clamped,
+    });
+  }
+
+  // 1) Midpoint of each pace block (user-facing interval).
+  for (const block of plan.paceBlocks ?? []) {
     const midSeg = Math.floor(
       (block.startSegmentIndex + block.endSegmentIndex) / 2,
     );
@@ -35,21 +55,26 @@ export function buildPathHandles(
       plan.points[Math.min(midSeg, plan.points.length - 1)] ??
       plan.segments[midSeg]?.start;
     if (!point) continue;
-
-    // Skip if an existing via is already near this handle.
-    const nearVia = viaPoints.some(
-      (via) => haversineDistance(via.location, point) < 35,
-    );
-    if (nearVia) continue;
-
-    handles.push({
-      id: `handle-${block.index}-${midSeg}`,
-      location: { lat: point.lat, lng: point.lng },
-      segmentIndex: midSeg,
-    });
+    pushHandle(midSeg, point, `handle-block-${block.index}-${midSeg}`);
   }
 
-  return handles;
+  // 2) Extra samples every ~150 m so long edges always have a grab point.
+  let walked = 0;
+  let nextAt = 75;
+  for (const segment of plan.segments) {
+    walked += segment.distanceMeters;
+    while (walked >= nextAt) {
+      pushHandle(
+        segment.index,
+        segment.end,
+        `handle-sample-${segment.index}-${Math.round(nextAt)}`,
+      );
+      nextAt += 150;
+    }
+  }
+
+  // Cap so the map stays usable on phones.
+  return handles.slice(0, 24);
 }
 
 /** Keep vias ordered along the current path geometry. */
@@ -75,6 +100,7 @@ export function upsertViaFromHandle(
   droppedAt: LatLng,
   plan: RoutePlan | null,
 ): ViaWaypoint[] {
+  void handle;
   const next: ViaWaypoint[] = [
     ...vias,
     { id: createId(), location: droppedAt },

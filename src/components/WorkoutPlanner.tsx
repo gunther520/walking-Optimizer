@@ -95,7 +95,7 @@ function createInitialFromStorage() {
       start: null as LatLng | null,
       end: null as LatLng | null,
       routePlan: null as RoutePlan | null,
-      mapLocked: false,
+      pickingEnabled: true,
       gpsConsent: false,
       viaPoints: [] as ViaWaypoint[],
       saveNote: null as string | null,
@@ -112,7 +112,7 @@ function createInitialFromStorage() {
     start: stored.start,
     end: stored.end,
     routePlan: stored.routePlan,
-    mapLocked: Boolean(stored.mapLocked && stored.routePlan),
+    pickingEnabled: !(stored.routePlan && stored.mapLocked === true),
     gpsConsent: Boolean(stored.gpsConsent),
     viaPoints: stored.viaPoints ?? [],
     saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
@@ -153,11 +153,10 @@ function WorkoutPlannerClient() {
   const [error, setError] = useState<string | null>(null);
   const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
-  const [mapLocked, setMapLocked] = useState(initial.mapLocked);
   const [gpsConsent, setGpsConsent] = useState(initial.gpsConsent);
   const [saveNote, setSaveNote] = useState<string | null>(initial.saveNote);
   const [viaPoints, setViaPoints] = useState<ViaWaypoint[]>(initial.viaPoints);
-  const [pathAdjustMode, setPathAdjustMode] = useState(false);
+  const [pickingEnabled, setPickingEnabled] = useState(initial.pickingEnabled);
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
@@ -168,11 +167,11 @@ function WorkoutPlannerClient() {
       start,
       end,
       routePlan,
-      mapLocked,
+      mapLocked: !pickingEnabled && Boolean(routePlan),
       gpsConsent,
       viaPoints,
     });
-  }, [form, start, end, routePlan, mapLocked, gpsConsent, viaPoints]);
+  }, [form, start, end, routePlan, pickingEnabled, gpsConsent, viaPoints]);
 
   useEffect(() => {
     if (!gpsConsent || !routePlan || !("geolocation" in navigator)) {
@@ -283,7 +282,7 @@ function WorkoutPlannerClient() {
   }, [routePlan]);
 
   function handleMapPick(point: LatLng) {
-    if (mapLocked) return;
+    if (!pickingEnabled) return;
     setError(null);
 
     // Starting a new pick sequence: keep the existing route visible until a
@@ -292,7 +291,6 @@ function WorkoutPlannerClient() {
       setStart(point);
       setEnd(null);
       setViaPoints([]);
-      setPathAdjustMode(false);
       setLiveStats(null);
       return;
     }
@@ -306,8 +304,7 @@ function WorkoutPlannerClient() {
     setRoutePlan(null);
     setLiveStats(null);
     setError(null);
-    setMapLocked(false);
-    setPathAdjustMode(false);
+    setPickingEnabled(true);
     setViaPoints([]);
     setCurrentPosition(null);
     lastFixRef.current = null;
@@ -316,28 +313,9 @@ function WorkoutPlannerClient() {
   }
 
   function handleEditRoutePoints() {
-    setMapLocked(false);
-    setPathAdjustMode(false);
+    setPickingEnabled(true);
     setError(null);
-  }
-
-  function handleStartPathAdjust() {
-    if (!routePlan) return;
-    setPathAdjustMode(true);
-    setMapLocked(true);
-    setSaveNote(
-      "Path adjust on — drag a blue handle off a blocked road. Orange vias stay in the path. Double-click a via to remove it.",
-    );
-  }
-
-  function handleDonePathAdjust() {
-    setPathAdjustMode(false);
-    setFitNonce((n) => n + 1);
-    setSaveNote(
-      viaPoints.length
-        ? `Path adjust done · ${viaPoints.length} avoidance via(s) kept.`
-        : "Path adjust done.",
-    );
+    setSaveNote("Click the map to set a new start, then end, then rebuild.");
   }
 
   function handleClearVias() {
@@ -348,23 +326,21 @@ function WorkoutPlannerClient() {
   }
 
   const pathHandles = useMemo(
-    () => (routePlan && pathAdjustMode ? buildPathHandles(routePlan, viaPoints) : []),
-    [routePlan, pathAdjustMode, viaPoints],
+    () => (routePlan ? buildPathHandles(routePlan, viaPoints) : []),
+    [routePlan, viaPoints],
   );
 
-  const pickHint = pathAdjustMode
-    ? "Drag a blue segment handle onto open ground to dodge a blockage. Double-click an orange via to remove it."
-    : mapLocked
-      ? "Map locked on the route. Press “Adjust path” to dodge blockages, or “Change start & end” to re-pick points."
-      : !start
-        ? "Click the map to set a start point."
-        : !end
-          ? routePlan
-            ? "Existing route kept. Click the map to set a new end point, then rebuild."
-            : "Click the map to set an end point."
-          : routePlan
-            ? "Start and end set. Rebuild to update the locked route view."
-            : "Start and end set. Build the walking plan.";
+  const pickHint = !pickingEnabled && routePlan
+    ? "Drag blue squares on the path to dodge blockages. Orange circles are vias — double-click to remove. Use “Change start & end” to re-pick endpoints."
+    : !start
+      ? "Click the map to set a start point."
+      : !end
+        ? routePlan
+          ? "Existing route kept. Click the map to set a new end point, then rebuild."
+          : "Click the map to set an end point."
+        : routePlan
+          ? "Start and end set. Rebuild to refresh the walking plan."
+          : "Start and end set. Build the walking plan.";
 
   async function rebuildRoute(nextVias: ViaWaypoint[], options?: { fit?: boolean }) {
     if (!start || !end) {
@@ -396,9 +372,9 @@ function WorkoutPlannerClient() {
 
       setRoutePlan(result as RoutePlan);
       setLiveStats(null);
-      setMapLocked(true);
+      setPickingEnabled(false);
       lastFixRef.current = null;
-      if (options?.fit !== false && !pathAdjustMode) {
+      if (options?.fit !== false) {
         setFitNonce((n) => n + 1);
       }
       setSaveNote(
@@ -448,7 +424,6 @@ function WorkoutPlannerClient() {
   }
 
   async function handleBuildRoute() {
-    setPathAdjustMode(false);
     await rebuildRoute(viaPoints, { fit: true });
   }
 
@@ -617,30 +592,11 @@ function WorkoutPlannerClient() {
             <button
               className={styles.secondaryButton}
               onClick={handleEditRoutePoints}
-              disabled={loading || !mapLocked}
+              disabled={loading || pickingEnabled}
               type="button"
             >
               Change start & end
             </button>
-            {!pathAdjustMode ? (
-              <button
-                className={styles.secondaryButton}
-                onClick={handleStartPathAdjust}
-                disabled={loading || !routePlan}
-                type="button"
-              >
-                Adjust path (avoid blockage)
-              </button>
-            ) : (
-              <button
-                className={styles.secondaryButton}
-                onClick={handleDonePathAdjust}
-                disabled={loading}
-                type="button"
-              >
-                Done adjusting path
-              </button>
-            )}
             <button
               className={styles.secondaryButton}
               onClick={handleClearVias}
@@ -698,9 +654,9 @@ function WorkoutPlannerClient() {
               <li>Click the map once to set a start point.</li>
               <li>Click a second time to set the destination.</li>
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
-              <li>Build the route — the map locks and focuses on the path.</li>
-              <li>Press “Adjust path” and drag a blue handle off a blocked road.</li>
-              <li>Press “Change start & end” to unlock and pick new points.</li>
+              <li>Build the route — the map stays interactive.</li>
+              <li>Drag blue squares on the path to dodge blocked roads.</li>
+              <li>Press “Change start & end” if you need new endpoints.</li>
               <li>Optionally enable GPS for live pace guidance on the path.</li>
             </ol>
           </div>
@@ -784,7 +740,7 @@ function WorkoutPlannerClient() {
         </aside>
 
         <section className={styles.mapPanel}>
-          <div className={`${styles.mapFrame} ${mapLocked ? styles.mapFrameLocked : ""}`}>
+          <div className={styles.mapFrame}>
             <LeafletMap
               start={start}
               end={end}
@@ -793,8 +749,7 @@ function WorkoutPlannerClient() {
               hazards={routePlan?.hazards ?? []}
               currentPosition={currentPosition}
               onPickPoint={handleMapPick}
-              locked={mapLocked}
-              pathAdjustMode={pathAdjustMode}
+              pickingEnabled={pickingEnabled}
               viaPoints={viaPoints}
               pathHandles={pathHandles}
               onViaMoved={handleViaMoved}
@@ -802,9 +757,24 @@ function WorkoutPlannerClient() {
               onHandleDropped={handleHandleDropped}
               fitNonce={fitNonce}
             />
-            {mapLocked ? (
-              <div className={styles.mapLockBadge}>
-                {pathAdjustMode ? "Adjusting path" : "Route locked"}
+            {routePlan ? (
+              <div className={styles.mapPathOverlay}>
+                <strong>Drag blue squares to avoid a blocked road</strong>
+                <span>
+                  Orange circles are vias. Double-click a via to remove it.
+                  {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
+                  {loading ? " · Updating…" : ""}
+                </span>
+                {viaPoints.length ? (
+                  <button
+                    type="button"
+                    className={styles.mapOverlayButton}
+                    onClick={handleClearVias}
+                    disabled={loading}
+                  >
+                    Clear vias
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>

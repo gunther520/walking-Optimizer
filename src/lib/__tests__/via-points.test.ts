@@ -70,15 +70,21 @@ function makePlan(): RoutePlan {
 }
 
 describe("via points", () => {
-  it("builds one handle per pace block away from existing vias", () => {
+  it("builds handles for pace blocks and distance samples", () => {
     const plan = makePlan();
     const handles = buildPathHandles(plan, []);
-    expect(handles.length).toBe(2);
+    expect(handles.length).toBeGreaterThanOrEqual(2);
 
-    const nearFirst = buildPathHandles(plan, [
+    const blocked = buildPathHandles(plan, [
       { id: "v1", location: handles[0].location },
+      { id: "v2", location: handles[1].location },
     ]);
-    expect(nearFirst.length).toBe(1);
+    expect(
+      blocked.every(
+        (handle) =>
+          handle.id !== handles[0].id && handle.id !== handles[1].id,
+      ),
+    ).toBe(true);
   });
 
   it("orders vias along the route after a handle drop", () => {
