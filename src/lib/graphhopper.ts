@@ -6,6 +6,52 @@ import {
 import { findNeglectedViaIndices } from "@/lib/via-points";
 import type { LatLng, RouteHazard, RoutePreference } from "@/types/workout";
 
+/**
+ * GraphHopper Free plan allows at most 5 routing locations per request
+ * (start + end + up to 3 vias). More vias are split across chained requests.
+ * @see https://docs.graphhopper.com/openapi/section/limitations
+ */
+export const GRAPHHOPPER_FREE_MAX_LOCATIONS = 5;
+/** App-level cap; more vias = more free-tier API credits (≈1 request per 3 vias). */
+export const MAX_AVOIDANCE_VIAS = 24;
+
+export function maxViasPerGraphHopperRequest(
+  maxLocations = GRAPHHOPPER_FREE_MAX_LOCATIONS,
+) {
+  return Math.max(0, maxLocations - 2);
+}
+
+/**
+ * Inclusive index windows over [start, ...vias, end] that never exceed
+ * maxLocations points, overlapping on the junction so the path stays continuous.
+ */
+export function buildLocationWindows(
+  stopCount: number,
+  maxLocations = GRAPHHOPPER_FREE_MAX_LOCATIONS,
+): Array<{ from: number; to: number }> {
+  if (stopCount < 2) return [];
+  const limit = Math.max(2, maxLocations);
+  const windows: Array<{ from: number; to: number }> = [];
+  let from = 0;
+  while (from < stopCount - 1) {
+    const to = Math.min(from + limit - 1, stopCount - 1);
+    windows.push({ from, to });
+    if (to >= stopCount - 1) break;
+    from = to;
+  }
+  return windows;
+}
+
+function isLocationLimitError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("location") ||
+    message.includes("too many points") ||
+    message.includes("point limit") ||
+    message.includes("maximum number of points")
+  );
+}
+
 type PathDetail = [number, number, string | number | null];
 
 type GraphHopperPath = {
@@ -205,59 +251,79 @@ async function requestRouteOnce(
 }
 
 /**
- * Force every via by routing leg-by-leg: start→v1, v1→v2, …, vn→end, then stitch.
- * More API calls, but each via is an endpoint and cannot be skipped.
+ * Chain GraphHopper requests so we stay within max locations/request (free = 5).
+ * Windows overlap on the junction point; path geometry is stitched afterward.
+ * Use maxLocationsPerRequest=2 to force every via as a hard leg endpoint.
  */
-async function requestRouteChained(
+async function requestRouteChunked(
   apiKey: string,
   start: LatLng,
   end: LatLng,
   preference: RoutePreference,
   vias: LatLng[],
+  maxLocationsPerRequest = GRAPHHOPPER_FREE_MAX_LOCATIONS,
 ): Promise<{
   route: ParsedRoute;
   usedPreference: RoutePreference;
   fallbackNote?: string;
 }> {
   const stops = [start, ...vias, end];
+  const windows = buildLocationWindows(stops.length, maxLocationsPerRequest);
   const allPoints: LatLng[] = [];
   const allInstructions: string[] = [];
   const allHazards: RouteHazard[] = [];
-  const snappedVias: LatLng[] = [];
+  const snappedByStopIndex = new Map<number, LatLng>();
   let usedPreference: RoutePreference = preference;
   let fallbackNote: string | undefined;
 
-  for (let i = 0; i < stops.length - 1; i += 1) {
+  for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
+    const { from, to } = windows[windowIndex];
+    const windowStops = stops.slice(from, to + 1);
+    const windowStart = windowStops[0];
+    const windowEnd = windowStops[windowStops.length - 1];
+    const windowVias = windowStops.slice(1, -1);
+
     const leg = await requestRouteOnce(
       apiKey,
-      stops[i],
-      stops[i + 1],
+      windowStart,
+      windowEnd,
       preference,
-      [],
+      windowVias,
     );
     usedPreference = leg.usedPreference;
     if (leg.fallbackNote) fallbackNote = leg.fallbackNote;
 
     const legPoints = leg.route.points;
     if (!legPoints.length) {
-      throw new Error("GraphHopper returned an empty leg while forcing vias.");
+      throw new Error("GraphHopper returned an empty leg while chaining vias.");
     }
 
-    // End of previous leg ≈ start of this leg; keep one copy of the junction.
-    if (i === 0) {
+    if (windowIndex === 0) {
       allPoints.push(...legPoints);
     } else {
       allPoints.push(...legPoints.slice(1));
     }
 
-    // After leg i we arrive at stops[i+1], which is via i while i < vias.length.
-    if (i < vias.length) {
-      snappedVias.push(legPoints[legPoints.length - 1]);
+    // Map snapped vias inside this window back onto global stop indices.
+    for (let v = 0; v < leg.route.snappedVias.length; v += 1) {
+      const stopIndex = from + 1 + v;
+      if (stopIndex > 0 && stopIndex < stops.length - 1) {
+        snappedByStopIndex.set(stopIndex, leg.route.snappedVias[v]);
+      }
+    }
+    // Window destination may itself be a via (junction into the next chunk).
+    if (to > 0 && to < stops.length - 1) {
+      snappedByStopIndex.set(to, legPoints[legPoints.length - 1]);
     }
 
     allInstructions.push(...leg.route.instructions);
     allHazards.push(...leg.route.routeHazards);
   }
+
+  const snappedVias = vias.map((_, index) => {
+    const stopIndex = index + 1;
+    return snappedByStopIndex.get(stopIndex) ?? vias[index];
+  });
 
   const segments = buildSegments(allPoints);
   const routeHazards = allHazards.map((hazard) => ({
@@ -290,25 +356,63 @@ export async function fetchWalkingRoute(
     throw new Error("Missing GRAPHOPPER_KEY environment variable.");
   }
 
-  let { route, usedPreference, fallbackNote } = await requestRouteOnce(
-    apiKey,
-    start,
-    end,
-    preference,
-    vias,
-  );
+  const singleRequestVias = maxViasPerGraphHopperRequest();
+  const mustChunk = vias.length > singleRequestVias;
 
-  // If any orange via sits far from the returned polyline, GraphHopper effectively
-  // neglected it (snap/order issues). Re-route leg-by-leg so every via is forced.
-  if (vias.length > 0) {
-    const neglected = findNeglectedViaIndices(vias, route.segments);
-    if (neglected.length > 0) {
-      ({ route, usedPreference, fallbackNote } = await requestRouteChained(
+  let route: ParsedRoute;
+  let usedPreference: RoutePreference;
+  let fallbackNote: string | undefined;
+
+  if (mustChunk) {
+    ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
+      apiKey,
+      start,
+      end,
+      preference,
+      vias,
+      GRAPHHOPPER_FREE_MAX_LOCATIONS,
+    ));
+    const chunkNote = `Split ${vias.length} vias across chained GraphHopper requests (free tier allows ${GRAPHHOPPER_FREE_MAX_LOCATIONS} locations each).`;
+    fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
+  } else {
+    try {
+      ({ route, usedPreference, fallbackNote } = await requestRouteOnce(
         apiKey,
         start,
         end,
         preference,
         vias,
+      ));
+    } catch (error) {
+      if (!isLocationLimitError(error) || vias.length === 0) {
+        throw error;
+      }
+      ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
+        apiKey,
+        start,
+        end,
+        preference,
+        vias,
+        GRAPHHOPPER_FREE_MAX_LOCATIONS,
+      ));
+      const chunkNote =
+        "GraphHopper location limit hit; rebuilt with chained free-tier-safe requests.";
+      fallbackNote = fallbackNote ? `${fallbackNote} ${chunkNote}` : chunkNote;
+    }
+  }
+
+  // If any orange via sits far from the returned polyline, force each via as a
+  // 2-point leg endpoint so it cannot be skipped.
+  if (vias.length > 0) {
+    const neglected = findNeglectedViaIndices(vias, route.segments);
+    if (neglected.length > 0) {
+      ({ route, usedPreference, fallbackNote } = await requestRouteChunked(
+        apiKey,
+        start,
+        end,
+        preference,
+        vias,
+        2,
       ));
       const chainNote =
         "Rebuilt leg-by-leg so every avoidance via is on the walking path.";

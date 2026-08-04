@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { fetchWalkingRoute } from "@/lib/graphhopper";
+import { fetchWalkingRoute, MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { buildRoutePlan } from "@/lib/optimizer";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { getDefaultSpeedBounds } from "@/lib/training";
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
           Number.isFinite(via.lat) &&
           Number.isFinite(via.lng),
       )
-      .slice(0, 8);
+      .slice(0, MAX_AVOIDANCE_VIAS);
 
     const route = await fetchWalkingRoute(
       body.start,
@@ -134,7 +134,12 @@ export async function POST(request: Request) {
     const preferenceNotes = [
       `Path preference: ${routePreferenceLabel(route.usedPreference)}`,
       ...(vias.length
-        ? [`Avoidance vias: ${vias.length} waypoint(s) forced into the path`]
+        ? [
+            `Avoidance vias: ${vias.length} waypoint(s) forced into the path` +
+              (vias.length > 3
+                ? " (chained GraphHopper requests for free-tier 5-location limit)"
+                : ""),
+          ]
         : []),
       ...(route.fallbackNote ? [route.fallbackNote] : []),
     ];

@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
+import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import {
@@ -468,6 +469,12 @@ function WorkoutPlannerClient() {
     handle: Parameters<typeof upsertViaFromHandle>[1],
     location: LatLng,
   ) {
+    if (viaPointsRef.current.length >= MAX_AVOIDANCE_VIAS) {
+      setError(
+        `At most ${MAX_AVOIDANCE_VIAS} avoidance vias — remove one before adding another.`,
+      );
+      return;
+    }
     const next = upsertViaFromHandle(
       viaPointsRef.current,
       handle,
@@ -819,6 +826,8 @@ function WorkoutPlannerClient() {
                 </strong>
                 <span>
                   Orange circles are vias. Double-click a via to remove it.
+                  Free GraphHopper allows 5 points/request — extra vias are
+                  chained automatically.
                   {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
                   {loading ? " · Updating…" : ""}
                 </span>
