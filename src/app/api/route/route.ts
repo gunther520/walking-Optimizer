@@ -142,6 +142,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ...plan,
       usedRoutePreference: route.usedPreference,
+      snappedVias: route.snappedVias,
       instructionSummary: [
         ...preferenceNotes,
         ...degradedNote,

@@ -13,10 +13,14 @@ import {
 } from "@/lib/planner-storage";
 import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 import {
+  applySnappedViaLocations,
   buildPathHandles,
+  normalizeViaPoints,
   removeVia,
+  sortViasBySequence,
   updateViaLocation,
   upsertViaFromHandle,
+  viasSignature,
   type ViaWaypoint,
 } from "@/lib/via-points";
 import {
@@ -114,7 +118,7 @@ function createInitialFromStorage() {
     routePlan: stored.routePlan,
     pickingEnabled: !(stored.routePlan && stored.mapLocked === true),
     gpsConsent: Boolean(stored.gpsConsent),
-    viaPoints: stored.viaPoints ?? [],
+    viaPoints: normalizeViaPoints(stored.viaPoints ?? []),
     saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
   };
 }
@@ -160,6 +164,23 @@ function WorkoutPlannerClient() {
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
+  const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
+  const routeRequestIdRef = useRef(0);
+  const startRef = useRef(start);
+  const endRef = useRef(end);
+  const formRef = useRef(form);
+
+  viaPointsRef.current = viaPoints;
+  startRef.current = start;
+  endRef.current = end;
+  formRef.current = form;
+
+  function commitViaPoints(next: ViaWaypoint[]) {
+    const ordered = sortViasBySequence(next);
+    viaPointsRef.current = ordered;
+    setViaPoints(ordered);
+    return ordered;
+  }
 
   useEffect(() => {
     savePlannerState({
@@ -290,7 +311,7 @@ function WorkoutPlannerClient() {
     if (!start || (start && end)) {
       setStart(point);
       setEnd(null);
-      setViaPoints([]);
+      commitViaPoints([]);
       setLiveStats(null);
       return;
     }
@@ -305,7 +326,7 @@ function WorkoutPlannerClient() {
     setLiveStats(null);
     setError(null);
     setPickingEnabled(true);
-    setViaPoints([]);
+    commitViaPoints([]);
     setCurrentPosition(null);
     lastFixRef.current = null;
     clearPlannerState();
@@ -319,7 +340,7 @@ function WorkoutPlannerClient() {
   }
 
   function handleClearVias() {
-    setViaPoints([]);
+    commitViaPoints([]);
     if (start && end) {
       void rebuildRoute([]);
     }
@@ -343,10 +364,16 @@ function WorkoutPlannerClient() {
           : "Start and end set. Build the walking plan.";
 
   async function rebuildRoute(nextVias: ViaWaypoint[], options?: { fit?: boolean }) {
-    if (!start || !end) {
+    const startPoint = startRef.current;
+    const endPoint = endRef.current;
+    if (!startPoint || !endPoint) {
       setError("Pick both a start and end point on the map first.");
       return;
     }
+
+    const orderedVias = sortViasBySequence(nextVias);
+    const requestSignature = viasSignature(orderedVias);
+    const requestId = ++routeRequestIdRef.current;
 
     setLoading(true);
     setError(null);
@@ -358,16 +385,34 @@ function WorkoutPlannerClient() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          start,
-          end,
-          vias: nextVias.map((via) => via.location),
-          profile: form,
+          start: startPoint,
+          end: endPoint,
+          vias: orderedVias.map((via) => via.location),
+          profile: formRef.current,
         }),
       });
 
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.error || "Unable to create the walking plan.");
+      }
+
+      // A newer rebuild started — discard this response.
+      if (requestId !== routeRequestIdRef.current) {
+        return;
+      }
+
+      // Vias changed while this request was in flight — rebuild with the latest set.
+      if (viasSignature(viaPointsRef.current) !== requestSignature) {
+        scheduleRebuild();
+        return;
+      }
+
+      const snapped = Array.isArray(result.snappedVias)
+        ? (result.snappedVias as LatLng[])
+        : [];
+      if (snapped.length === orderedVias.length && orderedVias.length > 0) {
+        commitViaPoints(applySnappedViaLocations(orderedVias, snapped));
       }
 
       setRoutePlan(result as RoutePlan);
@@ -378,53 +423,63 @@ function WorkoutPlannerClient() {
         setFitNonce((n) => n + 1);
       }
       setSaveNote(
-        nextVias.length
-          ? `Plan updated with ${nextVias.length} avoidance via(s).`
+        orderedVias.length
+          ? `Plan updated with ${orderedVias.length} avoidance via(s).`
           : "Plan saved in this browser for next visit.",
       );
     } catch (requestError) {
+      if (requestId !== routeRequestIdRef.current) {
+        return;
+      }
       setError(
         requestError instanceof Error
           ? requestError.message
           : "Unable to create the walking plan.",
       );
     } finally {
-      setLoading(false);
+      if (requestId === routeRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   }
 
-  function scheduleRebuild(nextVias: ViaWaypoint[]) {
+  function scheduleRebuild(nextVias?: ViaWaypoint[]) {
     if (rebuildTimerRef.current != null) {
       window.clearTimeout(rebuildTimerRef.current);
     }
     rebuildTimerRef.current = window.setTimeout(() => {
-      void rebuildRoute(nextVias, { fit: false });
+      void rebuildRoute(nextVias ?? viaPointsRef.current, { fit: false });
     }, 250);
   }
 
   function handleViaMoved(viaId: string, location: LatLng) {
-    const next = updateViaLocation(viaPoints, viaId, location, routePlan);
-    setViaPoints(next);
-    scheduleRebuild(next);
+    const next = updateViaLocation(viaPointsRef.current, viaId, location, routePlan);
+    commitViaPoints(next);
+    scheduleRebuild();
   }
 
   function handleViaRemoved(viaId: string) {
-    const next = removeVia(viaPoints, viaId);
-    setViaPoints(next);
-    scheduleRebuild(next);
+    const next = removeVia(viaPointsRef.current, viaId);
+    commitViaPoints(next);
+    scheduleRebuild();
   }
 
   function handleHandleDropped(
     handle: Parameters<typeof upsertViaFromHandle>[1],
     location: LatLng,
   ) {
-    const next = upsertViaFromHandle(viaPoints, handle, location, routePlan);
-    setViaPoints(next);
-    scheduleRebuild(next);
+    const next = upsertViaFromHandle(
+      viaPointsRef.current,
+      handle,
+      location,
+      routePlan,
+    );
+    commitViaPoints(next);
+    scheduleRebuild();
   }
 
   async function handleBuildRoute() {
-    await rebuildRoute(viaPoints, { fit: true });
+    await rebuildRoute(viaPointsRef.current, { fit: true });
   }
 
   function handleEnableGps() {

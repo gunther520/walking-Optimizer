@@ -4,6 +4,12 @@ import { getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 export type ViaWaypoint = {
   id: string;
   location: LatLng;
+  /**
+   * Stable visit order. Set from path distance when the via is created from a
+   * handle, and kept when the marker is dragged off-path for a detour.
+   * Sorting by nearest-on-current-path would scramble off-path avoidance vias.
+   */
+  sequence: number;
 };
 
 export type PathHandle = {
@@ -23,6 +29,8 @@ const END_MARGIN_METERS = 120;
 const VIA_CLEARANCE_METERS = 55;
 /** Soft cap so phones stay usable on very long walks. */
 const MAX_HANDLES = 18;
+/** A via farther than this from the rebuilt path is treated as neglected. */
+export const VIA_ON_PATH_MAX_METERS = 95;
 
 function createId() {
   return `via-${Math.random().toString(36).slice(2, 10)}`;
@@ -153,49 +161,113 @@ export function buildPathHandles(
   return handles;
 }
 
-/** Keep vias ordered along the current path geometry. */
+/** Visit order for GraphHopper: stable sequence, never nearest-on-path. */
+export function sortViasBySequence(vias: ViaWaypoint[]): ViaWaypoint[] {
+  return [...vias].sort((a, b) => {
+    if (a.sequence !== b.sequence) return a.sequence - b.sequence;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/** @deprecated Prefer sortViasBySequence — kept for older call sites/tests. */
 export function sortViasAlongRoute(
   vias: ViaWaypoint[],
-  plan: RoutePlan | null,
+  _plan: RoutePlan | null,
 ): ViaWaypoint[] {
-  if (!plan?.segments.length) return vias;
+  void _plan;
+  return sortViasBySequence(vias);
+}
 
-  return [...vias].sort((a, b) => {
-    const aMatch = getNearestSegmentMatch(a.location, plan.segments);
-    const bMatch = getNearestSegmentMatch(b.location, plan.segments);
-    if (aMatch.segmentIndex !== bMatch.segmentIndex) {
-      return aMatch.segmentIndex - bMatch.segmentIndex;
+export function normalizeViaPoints(
+  vias: Array<{ id: string; location: LatLng; sequence?: number }>,
+): ViaWaypoint[] {
+  return sortViasBySequence(
+    vias.map((via, index) => ({
+      id: via.id,
+      location: via.location,
+      sequence:
+        typeof via.sequence === "number" && Number.isFinite(via.sequence)
+          ? via.sequence
+          : index * 1000,
+    })),
+  );
+}
+
+/**
+ * Indices of vias that the rebuilt path does not pass near.
+ * Used to detect GraphHopper responses that effectively skipped waypoints.
+ */
+export function findNeglectedViaIndices(
+  vias: LatLng[],
+  segments: RouteSegment[],
+  maxMeters = VIA_ON_PATH_MAX_METERS,
+): number[] {
+  if (!vias.length || !segments.length) return vias.map((_, index) => index);
+
+  const neglected: number[] = [];
+  for (let index = 0; index < vias.length; index += 1) {
+    const match = getNearestSegmentMatch(vias[index], segments);
+    if (match.distanceMeters > maxMeters) {
+      neglected.push(index);
     }
-    return a.location.lat - b.location.lat;
-  });
+  }
+  return neglected;
 }
 
 export function upsertViaFromHandle(
   vias: ViaWaypoint[],
   handle: PathHandle,
   droppedAt: LatLng,
-  plan: RoutePlan | null,
+  _plan: RoutePlan | null = null,
 ): ViaWaypoint[] {
-  void handle;
+  void _plan;
+  // Tiny epsilon so two drops from nearby handles keep a deterministic order.
+  const sequence =
+    handle.alongMeters +
+    vias.filter((via) => Math.abs(via.sequence - handle.alongMeters) < 1).length *
+      0.01;
+
   const next: ViaWaypoint[] = [
     ...vias,
-    { id: createId(), location: droppedAt },
+    { id: createId(), location: droppedAt, sequence },
   ];
-  return sortViasAlongRoute(next, plan);
+  return sortViasBySequence(next);
 }
 
 export function updateViaLocation(
   vias: ViaWaypoint[],
   viaId: string,
   location: LatLng,
-  plan: RoutePlan | null,
+  _plan: RoutePlan | null = null,
 ): ViaWaypoint[] {
-  const next = vias.map((via) =>
+  void _plan;
+  // Keep sequence so dragging off-path for a detour does not reorder visit list.
+  return vias.map((via) =>
     via.id === viaId ? { ...via, location } : via,
   );
-  return sortViasAlongRoute(next, plan);
 }
 
 export function removeVia(vias: ViaWaypoint[], viaId: string): ViaWaypoint[] {
   return vias.filter((via) => via.id !== viaId);
+}
+
+export function viasSignature(vias: ViaWaypoint[]): string {
+  return sortViasBySequence(vias)
+    .map(
+      (via) =>
+        `${via.id}:${via.location.lat.toFixed(5)},${via.location.lng.toFixed(5)}`,
+    )
+    .join("|");
+}
+
+export function applySnappedViaLocations(
+  vias: ViaWaypoint[],
+  snapped: LatLng[],
+): ViaWaypoint[] {
+  const ordered = sortViasBySequence(vias);
+  if (snapped.length !== ordered.length) return ordered;
+  return ordered.map((via, index) => ({
+    ...via,
+    location: snapped[index],
+  }));
 }
