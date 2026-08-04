@@ -1,24 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSegments } from "@/lib/route-math";
+import { buildSegments, haversineDistance } from "@/lib/route-math";
 import {
   buildPathHandles,
+  pointAtDistanceAlongRoute,
   sortViasAlongRoute,
   upsertViaFromHandle,
   updateViaLocation,
   removeVia,
 } from "@/lib/via-points";
-import type { RoutePlan } from "@/types/workout";
+import type { LatLng, RoutePlan } from "@/types/workout";
 
-function makePlan(): RoutePlan {
-  const points = [
-    { lat: 22.3, lng: 114.17 },
-    { lat: 22.301, lng: 114.17 },
-    { lat: 22.302, lng: 114.17 },
-    { lat: 22.303, lng: 114.17 },
-    { lat: 22.304, lng: 114.17 },
-  ];
+function makeLinePlan(metersRough: number): RoutePlan {
+  // ~11.1 m per 0.0001 deg latitude
+  const steps = Math.max(4, Math.ceil(metersRough / 11.1));
+  const points: LatLng[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    points.push({ lat: 22.3 + i * 0.0001, lng: 114.17, ele: 10 });
+  }
   const segments = buildSegments(points);
+  const totalDistanceMeters = segments.reduce(
+    (sum, segment) => sum + segment.distanceMeters,
+    0,
+  );
+
   return {
     points,
     segments,
@@ -27,15 +32,15 @@ function makePlan(): RoutePlan {
       targetSpeedMps: 1.4,
       estimatedHr: 120,
       estimatedMets: 4,
-      paceRole: segment.index < 2 ? "push" : "steady",
+      paceRole: "steady",
     })),
     paceBlocks: [
       {
         index: 0,
         paceRole: "push",
         startSegmentIndex: 0,
-        endSegmentIndex: 1,
-        distanceMeters: 200,
+        endSegmentIndex: Math.floor(segments.length / 2),
+        distanceMeters: totalDistanceMeters * 0.5,
         durationSeconds: 180,
         avgSpeedMps: 1.4,
         avgHr: 140,
@@ -45,9 +50,9 @@ function makePlan(): RoutePlan {
       {
         index: 1,
         paceRole: "steady",
-        startSegmentIndex: 2,
-        endSegmentIndex: 3,
-        distanceMeters: 80,
+        startSegmentIndex: Math.floor(segments.length / 2) + 1,
+        endSegmentIndex: segments.length - 1,
+        distanceMeters: totalDistanceMeters * 0.5,
         durationSeconds: 60,
         avgSpeedMps: 1.2,
         avgHr: 110,
@@ -63,15 +68,41 @@ function makePlan(): RoutePlan {
       hrMax: 188,
     },
     hazards: [],
-    totalDistanceMeters: 280,
+    totalDistanceMeters,
     estimatedDurationSeconds: 240,
     instructionSummary: [],
   };
 }
 
 describe("via points", () => {
-  it("builds handles for pace blocks and distance samples", () => {
-    const plan = makePlan();
+  it("spaces handles evenly along the full route", () => {
+    const plan = makeLinePlan(2000);
+    const handles = buildPathHandles(plan, []);
+    expect(handles.length).toBeGreaterThanOrEqual(4);
+
+    const firstHalf = handles.filter(
+      (handle) => handle.segmentIndex < plan.segments.length / 2,
+    );
+    const secondHalf = handles.filter(
+      (handle) => handle.segmentIndex >= plan.segments.length / 2,
+    );
+    expect(secondHalf.length).toBeGreaterThan(0);
+    expect(Math.abs(firstHalf.length - secondHalf.length)).toBeLessThanOrEqual(
+      2,
+    );
+
+    // Neighbor spacing should stay roughly consistent (not piled at the start).
+    const gaps: number[] = [];
+    for (let i = 1; i < handles.length; i += 1) {
+      gaps.push(haversineDistance(handles[i - 1].location, handles[i].location));
+    }
+    const avg = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+    expect(avg).toBeGreaterThan(150);
+    expect(avg).toBeLessThan(350);
+  });
+
+  it("skips handles near existing vias", () => {
+    const plan = makeLinePlan(1200);
     const handles = buildPathHandles(plan, []);
     expect(handles.length).toBeGreaterThanOrEqual(2);
 
@@ -87,19 +118,30 @@ describe("via points", () => {
     ).toBe(true);
   });
 
+  it("interpolates a point at a target distance", () => {
+    const plan = makeLinePlan(500);
+    const mid = pointAtDistanceAlongRoute(
+      plan.segments,
+      plan.totalDistanceMeters / 2,
+    );
+    expect(mid).not.toBeNull();
+    expect(mid!.segmentIndex).toBeGreaterThanOrEqual(0);
+  });
+
   it("orders vias along the route after a handle drop", () => {
-    const plan = makePlan();
+    const plan = makeLinePlan(800);
     const handles = buildPathHandles(plan, []);
+    expect(handles.length).toBeGreaterThanOrEqual(2);
     const later = upsertViaFromHandle(
       [],
       handles[1],
-      { lat: 22.3035, lng: 114.171 },
+      { lat: 22.305, lng: 114.171 },
       plan,
     );
     const both = upsertViaFromHandle(
       later,
       handles[0],
-      { lat: 22.3005, lng: 114.171 },
+      { lat: 22.301, lng: 114.171 },
       plan,
     );
     expect(both).toHaveLength(2);
@@ -107,7 +149,7 @@ describe("via points", () => {
   });
 
   it("updates and removes vias", () => {
-    const plan = makePlan();
+    const plan = makeLinePlan(400);
     const vias = [{ id: "a", location: { lat: 22.301, lng: 114.17 } }];
     const moved = updateViaLocation(
       vias,
