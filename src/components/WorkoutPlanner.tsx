@@ -14,7 +14,7 @@ import {
   parseShareSearch,
   shareUrlFromState,
 } from "@/lib/share-url";
-import { isSilentTurn } from "@/lib/turns";
+import { isSilentTurn, nextTurnGuidance } from "@/lib/turns";
 import {
   headingDegrees,
   parseWalkShape,
@@ -305,6 +305,15 @@ function WorkoutPlannerClient() {
     () => (routePlan ? buildSplitMarkers(routePlan) : []),
     [routePlan],
   );
+
+  const nextTurn = useMemo(() => {
+    if (!routePlan) return null;
+    return nextTurnGuidance(
+      routePlan.turns ?? [],
+      routePlan.segments,
+      alongProgress?.alongMeters ?? 0,
+    );
+  }, [routePlan, alongProgress?.alongMeters]);
 
   function commitViaPoints(next: ViaWaypoint[]) {
     const ordered = sortViasBySequence(next);
@@ -1549,7 +1558,22 @@ function WorkoutPlannerClient() {
               onFollowInterrupted={() => setFollowWalker(false)}
               gpsHeadingDeg={gpsHeadingDeg}
               splitMarkers={splitMarkers}
+              nextTurn={nextTurn}
             />
+            {nextTurn ? (
+              <div
+                className={`${styles.mapTurnBanner}${
+                  nextTurn.approaching ? ` ${styles.mapTurnBannerApproaching}` : ""
+                }`}
+              >
+                <strong>
+                  {nextTurn.approaching
+                    ? "Turn now"
+                    : `In ${formatDistance(nextTurn.metersAway)}`}
+                </strong>
+                <span>{nextTurn.turn.text}</span>
+              </div>
+            ) : null}
             {routePlan ? (
               <div className={styles.mapPathOverlay}>
                 <strong>

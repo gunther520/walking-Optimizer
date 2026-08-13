@@ -1,6 +1,7 @@
 import { buildSegments } from "@/lib/route-math";
-import { buildCumulativeDistances } from "@/lib/via-points";
-import type { LatLng, PaceRole, RouteTurn } from "@/types/workout";
+import { headingDegrees } from "@/lib/time-budget";
+import { buildCumulativeDistances, pointAtDistanceAlongRoute } from "@/lib/via-points";
+import type { LatLng, PaceRole, RouteSegment, RouteTurn } from "@/types/workout";
 
 /** GraphHopper instruction signs we treat as "keep going" (no spoken cue). */
 const CONTINUE_SIGN = 0;
@@ -102,6 +103,34 @@ export function upcomingTurn(
     if (turn.alongMeters + TURN_PASSED_METERS >= alongMeters) return turn;
   }
   return null;
+}
+
+export type TurnGuidance = {
+  turn: RouteTurn;
+  location: LatLng;
+  headingDeg: number;
+  metersAway: number;
+  approaching: boolean;
+};
+
+/** Next actionable turn snapped onto the walked polyline. */
+export function nextTurnGuidance(
+  turns: RouteTurn[],
+  segments: RouteSegment[],
+  alongMeters: number,
+): TurnGuidance | null {
+  const turn = upcomingTurn(turns, alongMeters);
+  if (!turn || !segments.length) return null;
+  const hit = pointAtDistanceAlongRoute(segments, turn.alongMeters);
+  if (!hit) return null;
+  const segment = segments[hit.segmentIndex] ?? segments[0];
+  return {
+    turn,
+    location: hit.location,
+    headingDeg: headingDegrees(segment.start, segment.end),
+    metersAway: Math.max(0, turn.alongMeters - alongMeters),
+    approaching: shouldAnnounceTurn(turn, alongMeters),
+  };
 }
 
 export function shouldAnnounceTurn(

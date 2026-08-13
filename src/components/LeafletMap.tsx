@@ -27,6 +27,7 @@ import {
 } from "@/lib/walk-follow";
 import type { PathHandle, ViaWaypoint } from "@/lib/via-points";
 import { formatSplitLabel, type SplitMarker } from "@/lib/walk-splits";
+import type { TurnGuidance } from "@/lib/turns";
 
 type LeafletMapProps = {
   start: LatLng | null;
@@ -61,6 +62,7 @@ type LeafletMapProps = {
   /** Compass heading in degrees, 0 = north. */
   gpsHeadingDeg?: number | null;
   splitMarkers?: SplitMarker[];
+  nextTurn?: TurnGuidance | null;
 };
 
 function ClickHandler({
@@ -226,6 +228,41 @@ function createKmIcon(label: string) {
       ">${label}</div>
     `,
     iconSize: [22, 22],
+    iconAnchor: [0, 0],
+  });
+}
+
+function createTurnIcon(headingDeg: number, approaching: boolean) {
+  const color = approaching ? "#ea580c" : "#2455d6";
+  const rotation = `rotate(${Math.round(headingDeg)}deg)`;
+  return L.divIcon({
+    className: "turn-icon",
+    html: `
+      <div style="
+        width: 36px;
+        height: 36px;
+        transform: translate(-50%, -50%) ${rotation};
+        filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+      ">
+        <div style="
+          width: 0;
+          height: 0;
+          margin: 0 auto;
+          border-left: 10px solid transparent;
+          border-right: 10px solid transparent;
+          border-bottom: 16px solid ${color};
+        "></div>
+        <div style="
+          width: 12px;
+          height: 12px;
+          margin: 1px auto 0;
+          border-radius: 50%;
+          background: ${color};
+          border: 2px solid #fff;
+        "></div>
+      </div>
+    `,
+    iconSize: [36, 36],
     iconAnchor: [0, 0],
   });
 }
@@ -437,6 +474,7 @@ export function LeafletMap({
   onFollowInterrupted,
   gpsHeadingDeg = null,
   splitMarkers = [],
+  nextTurn = null,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -456,6 +494,14 @@ export function LeafletMap({
     () => createYouIcon(headingBucket),
     [headingBucket],
   );
+  const turnHeadingBucket =
+    nextTurn != null && Number.isFinite(nextTurn.headingDeg)
+      ? Math.round(nextTurn.headingDeg / 8) * 8
+      : null;
+  const turnIcon = useMemo(() => {
+    if (turnHeadingBucket == null || !nextTurn) return null;
+    return createTurnIcon(turnHeadingBucket, nextTurn.approaching);
+  }, [turnHeadingBucket, nextTurn?.approaching]);
 
   useEffect(() => {
     return () => {
@@ -652,6 +698,18 @@ export function LeafletMap({
           </Tooltip>
         </Marker>
       ))}
+      {nextTurn && turnIcon ? (
+        <Marker
+          position={[nextTurn.location.lat, nextTurn.location.lng]}
+          icon={turnIcon}
+          zIndexOffset={900}
+          interactive={false}
+        >
+          <Tooltip direction="top" offset={[0, -14]}>
+            {nextTurn.turn.text}
+          </Tooltip>
+        </Marker>
+      ) : null}
       {start ? (
         <CircleMarker center={[start.lat, start.lng]} radius={9} pathOptions={{ color: "#16a34a" }}>
           <Tooltip direction="top" offset={[0, -10]} permanent>
