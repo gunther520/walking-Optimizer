@@ -1,10 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
+import { downloadRouteGpx } from "@/lib/gpx";
 import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
+import { walkedPathPoints, type AlongPathProgress } from "@/lib/walk-along";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import {
@@ -163,6 +165,9 @@ function WorkoutPlannerClient() {
   const [viaPoints, setViaPoints] = useState<ViaWaypoint[]>(initial.viaPoints);
   const [pickingEnabled, setPickingEnabled] = useState(initial.pickingEnabled);
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
+  const [alongProgress, setAlongProgress] = useState<AlongPathProgress | null>(
+    null,
+  );
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
@@ -175,6 +180,17 @@ function WorkoutPlannerClient() {
   startRef.current = start;
   endRef.current = end;
   formRef.current = form;
+
+  const handleAlongProgress = useCallback((progress: AlongPathProgress | null) => {
+    setAlongProgress(progress);
+  }, []);
+
+  const walkedPath = useMemo(() => {
+    if (!routePlan || !alongProgress || alongProgress.alongMeters < 8) {
+      return [];
+    }
+    return walkedPathPoints(routePlan, alongProgress.alongMeters);
+  }, [routePlan, alongProgress]);
 
   function commitViaPoints(next: ViaWaypoint[]) {
     const ordered = sortViasBySequence(next);
@@ -324,6 +340,7 @@ function WorkoutPlannerClient() {
     setStart(null);
     setEnd(null);
     setRoutePlan(null);
+    setAlongProgress(null);
     setLiveStats(null);
     setError(null);
     setPickingEnabled(true);
@@ -343,7 +360,7 @@ function WorkoutPlannerClient() {
   function handleClearVias() {
     commitViaPoints([]);
     if (start && end) {
-      void rebuildRoute([]);
+      void rebuildRoute([], { includeOsmHazards: false });
     }
   }
 
@@ -364,7 +381,10 @@ function WorkoutPlannerClient() {
           ? "Start and end set. Rebuild to refresh the walking plan."
           : "Start and end set. Build the walking plan.";
 
-  async function rebuildRoute(nextVias: ViaWaypoint[], options?: { fit?: boolean }) {
+  async function rebuildRoute(
+    nextVias: ViaWaypoint[],
+    options?: { fit?: boolean; includeOsmHazards?: boolean },
+  ) {
     const startPoint = startRef.current;
     const endPoint = endRef.current;
     if (!startPoint || !endPoint) {
@@ -390,6 +410,7 @@ function WorkoutPlannerClient() {
           end: endPoint,
           vias: orderedVias.map((via) => via.location),
           profile: formRef.current,
+          includeOsmHazards: options?.includeOsmHazards !== false,
         }),
       });
 
@@ -449,8 +470,11 @@ function WorkoutPlannerClient() {
       window.clearTimeout(rebuildTimerRef.current);
     }
     rebuildTimerRef.current = window.setTimeout(() => {
-      void rebuildRoute(nextVias ?? viaPointsRef.current, { fit: false });
-    }, 250);
+      void rebuildRoute(nextVias ?? viaPointsRef.current, {
+        fit: false,
+        includeOsmHazards: false,
+      });
+    }, 400);
   }
 
   function handleViaMoved(viaId: string, location: LatLng) {
@@ -486,7 +510,20 @@ function WorkoutPlannerClient() {
   }
 
   async function handleBuildRoute() {
-    await rebuildRoute(viaPointsRef.current, { fit: true });
+    await rebuildRoute(viaPointsRef.current, {
+      fit: true,
+      includeOsmHazards: true,
+    });
+  }
+
+  function handleExportGpx() {
+    if (!routePlan) return;
+    downloadRouteGpx(routePlan, {
+      start,
+      end,
+      vias: viaPoints.map((via) => via.location),
+    });
+    setSaveNote("Downloaded GPX for this walking route.");
   }
 
   function handleEnableGps() {
@@ -653,6 +690,14 @@ function WorkoutPlannerClient() {
             </button>
             <button
               className={styles.secondaryButton}
+              onClick={handleExportGpx}
+              disabled={!routePlan}
+              type="button"
+            >
+              Download GPX
+            </button>
+            <button
+              className={styles.secondaryButton}
               onClick={handleEditRoutePoints}
               disabled={loading || pickingEnabled}
               type="button"
@@ -717,6 +762,7 @@ function WorkoutPlannerClient() {
               <li>Click a second time to set the destination.</li>
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
               <li>Build the route — the map stays interactive.</li>
+              <li>Download GPX to walk it in another app or watch.</li>
               <li>Drag blue squares on the path to dodge blocked roads.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>
               <li>Optionally enable GPS for live pace guidance on the path.</li>
@@ -795,6 +841,8 @@ function WorkoutPlannerClient() {
               onRoute={
                 liveStats != null && liveStats.distanceToRouteMeters <= 40
               }
+              currentPosition={currentPosition}
+              onAlongProgress={handleAlongProgress}
             />
           ) : null}
 
@@ -818,6 +866,12 @@ function WorkoutPlannerClient() {
               onViaRemoved={handleViaRemoved}
               onHandleDropped={handleHandleDropped}
               fitNonce={fitNonce}
+              walkedPath={walkedPath}
+              walkerOnPath={
+                alongProgress && alongProgress.alongMeters >= 8
+                  ? alongProgress.location
+                  : null
+              }
             />
             {routePlan ? (
               <div className={styles.mapPathOverlay}>

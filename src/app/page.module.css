@@ -505,6 +505,28 @@
   font-size: 14px;
 }
 
+.walkProgress {
+  margin-top: 14px;
+  height: 8px;
+  overflow: hidden;
+  background: #e2e8f0;
+  border-radius: 999px;
+}
+
+.walkProgressFill {
+  height: 100%;
+  background: #2455d6;
+  border-radius: 999px;
+  transition: width 0.35s linear;
+}
+
+.walkProgressLabel {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .walkHudCountdown {
   display: flex;
   flex-direction: column;

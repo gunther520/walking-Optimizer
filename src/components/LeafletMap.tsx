@@ -40,6 +40,9 @@ type LeafletMapProps = {
   onHandleDropped: (handle: PathHandle, location: LatLng) => void;
   /** Bump to re-fit the camera to the route. */
   fitNonce: number;
+  /** Walked portion of the route (clock or on-path GPS). */
+  walkedPath?: LatLng[];
+  walkerOnPath?: LatLng | null;
 };
 
 function ClickHandler({
@@ -283,6 +286,8 @@ export function LeafletMap({
   onViaRemoved,
   onHandleDropped,
   fitNonce,
+  walkedPath = [],
+  walkerOnPath = null,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -412,6 +417,15 @@ export function LeafletMap({
             />
           ) : null}
 
+      {walkedPath.length > 1 ? (
+        <Polyline
+          positions={walkedPath.map(
+            (point) => [point.lat, point.lng] as [number, number],
+          )}
+          pathOptions={{ color: "#1e3a8a", weight: 9, opacity: 0.45 }}
+        />
+      ) : null}
+
       {hazards.map((hazard) => (
         <Marker
           key={`${hazard.kind}-${hazard.segmentIndex}-${hazard.location.lat.toFixed(5)}-${hazard.location.lng.toFixed(5)}`}
@@ -460,6 +474,22 @@ export function LeafletMap({
         >
           <Tooltip direction="top" offset={[0, -10]}>
             You
+          </Tooltip>
+        </CircleMarker>
+      ) : null}
+      {walkerOnPath ? (
+        <CircleMarker
+          center={[walkerOnPath.lat, walkerOnPath.lng]}
+          radius={10}
+          pathOptions={{
+            color: "#fff",
+            weight: 3,
+            fillColor: "#0ea5e9",
+            fillOpacity: 0.95,
+          }}
+        >
+          <Tooltip direction="top" offset={[0, -10]} permanent>
+            On path
           </Tooltip>
         </CircleMarker>
       ) : null}

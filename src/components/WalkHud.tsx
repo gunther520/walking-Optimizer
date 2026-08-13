@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getWalkProgress,
@@ -9,8 +9,12 @@ import {
   paceRoleLabel,
   playIntervalCue,
 } from "@/lib/pace-style";
-import { formatDuration } from "@/lib/route-math";
+import { formatDistance, formatDuration } from "@/lib/route-math";
 import type { PaceRole, RoutePlan } from "@/types/workout";
+import {
+  getAlongPathProgress,
+  type AlongPathProgress,
+} from "@/lib/walk-along";
 
 import styles from "@/app/page.module.css";
 
@@ -19,6 +23,8 @@ type WalkHudProps = {
   liveSegmentIndex: number | null;
   /** True only when GPS fix is near the planned path. */
   onRoute: boolean;
+  currentPosition?: { lat: number; lng: number } | null;
+  onAlongProgress?: (progress: AlongPathProgress | null) => void;
 };
 
 const DEMO_SPEED = 10;
@@ -27,6 +33,8 @@ export function WalkHud({
   routePlan,
   liveSegmentIndex,
   onRoute,
+  currentPosition = null,
+  onAlongProgress,
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
@@ -36,6 +44,16 @@ export function WalkHud({
   const pausedElapsedRef = useRef(0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
+  const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
+
+  useEffect(() => {
+    setWalking(false);
+    pausedElapsedRef.current = 0;
+    walkingSinceRef.current = null;
+    setElapsedSeconds(0);
+    lastRoleRef.current = null;
+    setLastCueNote(null);
+  }, [routeId]);
 
   useEffect(() => {
     if (!walking) {
@@ -70,7 +88,23 @@ export function WalkHud({
     elapsedSeconds,
     { onRoute },
   );
+  const along = useMemo(
+    () =>
+      getAlongPathProgress(routePlan, elapsedSeconds, {
+        onRoute,
+        currentPosition,
+      }),
+    [routePlan, elapsedSeconds, onRoute, currentPosition],
+  );
   const role = progress.block?.paceRole ?? null;
+
+  useEffect(() => {
+    onAlongProgress?.(along);
+  }, [along, onAlongProgress]);
+
+  useEffect(() => {
+    return () => onAlongProgress?.(null);
+  }, [onAlongProgress]);
 
   useEffect(() => {
     if (!walking || !cuesOn || !role) return;
@@ -162,6 +196,18 @@ export function WalkHud({
         </strong>
         <p className={styles.walkHudHint}>
           {role ? paceRoleHint(role) : "Start walk to begin interval cues."}
+        </p>
+        <div className={styles.walkProgress}>
+          <div
+            className={styles.walkProgressFill}
+            style={{ width: `${Math.min(100, along.fraction * 100)}%` }}
+          />
+        </div>
+        <p className={styles.walkProgressLabel}>
+          {formatDistance(along.alongMeters)} of{" "}
+          {formatDistance(along.totalMeters)}
+          {" · "}
+          {formatDistance(along.remainingMeters)} remaining
         </p>
         <div className={styles.walkHudCountdown}>
           {formatDuration(Math.round(progress.remainingSeconds))}

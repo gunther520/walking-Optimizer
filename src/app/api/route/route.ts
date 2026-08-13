@@ -19,6 +19,8 @@ type RouteRequestBody = {
   start: { lat: number; lng: number };
   end: { lat: number; lng: number };
   vias?: Array<{ lat: number; lng: number }>;
+  /** Default true. Via-only rebuilds skip Overpass to save time and credits. */
+  includeOsmHazards?: boolean;
   profile: {
     age: number;
     weightKg: number;
@@ -84,6 +86,8 @@ export async function POST(request: Request) {
       )
       .slice(0, MAX_AVOIDANCE_VIAS);
 
+    const includeOsmHazards = body.includeOsmHazards !== false;
+
     const route = await fetchWalkingRoute(
       body.start,
       body.end,
@@ -92,6 +96,7 @@ export async function POST(request: Request) {
     );
 
     // Never block the walk plan on Overpass — GraphHopper hazards alone are enough.
+    // Via-only rebuilds skip Overpass: stairs still come from GraphHopper road_class.
     const osmTimedOut = {
       hazards: [] as Awaited<
         ReturnType<typeof findOSMHazardsAlongRoute>
@@ -103,12 +108,23 @@ export async function POST(request: Request) {
         onPathOsmCount: 0,
       },
     };
-    const osm = await Promise.race([
-      findOSMHazardsAlongRoute(route.points, route.segments),
-      new Promise<typeof osmTimedOut>((resolve) => {
-        setTimeout(() => resolve(osmTimedOut), 7000);
-      }),
-    ]);
+    const osmSkipped = {
+      hazards: [] as typeof osmTimedOut.hazards,
+      debug: {
+        overpassOk: true,
+        overpassError: undefined as string | undefined,
+        rawOsmCount: 0,
+        onPathOsmCount: 0,
+      },
+    };
+    const osm = includeOsmHazards
+      ? await Promise.race([
+          findOSMHazardsAlongRoute(route.points, route.segments),
+          new Promise<typeof osmTimedOut>((resolve) => {
+            setTimeout(() => resolve(osmTimedOut), 7000);
+          }),
+        ])
+      : osmSkipped;
 
     const hazards = filterHazardsOnPath(
       dedupeHazards([...route.routeHazards, ...osm.hazards]),
@@ -123,13 +139,15 @@ export async function POST(request: Request) {
       hazards,
     );
 
-    const degradedNote = osm.debug.overpassOk
-      ? []
-      : [
-          `OSM hazard lookup degraded${
-            osm.debug.overpassError ? `: ${osm.debug.overpassError}` : ""
-          }. Plan still built with GraphHopper on-path stairs.`,
-        ];
+    const degradedNote = includeOsmHazards
+      ? osm.debug.overpassOk
+        ? []
+        : [
+            `OSM hazard lookup degraded${
+              osm.debug.overpassError ? `: ${osm.debug.overpassError}` : ""
+            }. Plan still built with GraphHopper on-path stairs.`,
+          ]
+      : ["OSM lookup skipped on via adjustment (GraphHopper stairs still applied)."];
 
     const preferenceNotes = [
       `Path preference: ${routePreferenceLabel(route.usedPreference)}`,
