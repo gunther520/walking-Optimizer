@@ -5,6 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { WalkHud } from "@/components/WalkHud";
 import { downloadRouteGpx } from "@/lib/gpx";
+import {
+  headingDegrees,
+  parseWalkShape,
+  targetDistanceMeters,
+  typicalWalkSpeedMps,
+  walkShapeLabel,
+  type WalkShape,
+} from "@/lib/time-budget";
 import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { walkedPathPoints, type AlongPathProgress } from "@/lib/walk-along";
 import { routePreferenceLabel } from "@/lib/route-preference";
@@ -66,6 +74,9 @@ type PlannerFormState = {
   maxSpeedMps: number;
   effortPreference: EffortPreference;
   routePreference: RoutePreference;
+  walkShape: WalkShape;
+  targetMinutes: number;
+  loopSeed: number;
 };
 
 type LiveStats = {
@@ -86,7 +97,12 @@ const DEFAULT_FORM: PlannerFormState = {
   maxSpeedMps: 1.75,
   effortPreference: "balanced",
   routePreference: "default",
+  walkShape: "point_to_point",
+  targetMinutes: 40,
+  loopSeed: 0,
 };
+
+const TURNAROUND_VIA_ID = "via-turnaround";
 
 function readClientMounted() {
   return true;
@@ -121,6 +137,9 @@ function createInitialFromStorage() {
       ...stored.form,
       effortPreference: stored.form.effortPreference ?? "balanced",
       routePreference: stored.form.routePreference ?? "default",
+      walkShape: parseWalkShape(stored.form.walkShape),
+      targetMinutes: Number(stored.form.targetMinutes ?? 40),
+      loopSeed: Number(stored.form.loopSeed ?? 0),
     },
     start: stored.start,
     end: stored.end,
@@ -172,6 +191,7 @@ function WorkoutPlannerClient() {
   const [viaHistory, setViaHistory] = useState<ViaHistory>(emptyViaHistory());
   const [pickingEnabled, setPickingEnabled] = useState(initial.pickingEnabled);
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
+  const [headingPoint, setHeadingPoint] = useState<LatLng | null>(null);
   const [alongProgress, setAlongProgress] = useState<AlongPathProgress | null>(
     null,
   );
@@ -182,12 +202,15 @@ function WorkoutPlannerClient() {
   const routeRequestIdRef = useRef(0);
   const startRef = useRef(start);
   const endRef = useRef(end);
+  const headingRef = useRef(headingPoint);
   const formRef = useRef(form);
+  headingRef.current = headingPoint;
 
   viaPointsRef.current = viaPoints;
   viaHistoryRef.current = viaHistory;
   startRef.current = start;
   endRef.current = end;
+  headingRef.current = headingPoint;
   formRef.current = form;
 
   const handleAlongProgress = useCallback((progress: AlongPathProgress | null) => {
@@ -343,12 +366,28 @@ function WorkoutPlannerClient() {
   function handleMapPick(point: LatLng) {
     if (!pickingEnabled) return;
     setError(null);
+    const shape = form.walkShape;
+
+    if (shape === "loop") {
+      if (!start || headingPoint) {
+        setStart(point);
+        setEnd(null);
+        setHeadingPoint(null);
+        commitViaPoints([]);
+        resetViaHistory();
+        setLiveStats(null);
+        return;
+      }
+      setHeadingPoint(point);
+      return;
+    }
 
     // Starting a new pick sequence: keep the existing route visible until a
     // successful rebuild, so a misclick doesn't wipe the path.
     if (!start || (start && end)) {
       setStart(point);
       setEnd(null);
+      setHeadingPoint(null);
       commitViaPoints([]);
       resetViaHistory();
       setLiveStats(null);
@@ -368,6 +407,7 @@ function WorkoutPlannerClient() {
     setPickingEnabled(true);
     commitViaPoints([]);
     resetViaHistory();
+    setHeadingPoint(null);
     setCurrentPosition(null);
     lastFixRef.current = null;
     clearPlannerState();
@@ -392,12 +432,20 @@ function WorkoutPlannerClient() {
 
   const pickHint = !pickingEnabled && routePlan
     ? "Click the colored path to dodge that street, or drag a blue square. Orange circles are vias — double-click to remove. Undo with Ctrl/⌘+Z."
-    : !start
+    : form.walkShape === "loop"
+      ? !start
+        ? "Click the map (or use your location) to set a start, then build a timed loop."
+        : headingPoint
+          ? "Start and heading set. Build the timed loop — or click again to reset start."
+          : "Optional: click a second point to aim the loop, then build."
+      : !start
       ? "Click the map to set a start point."
       : !end
         ? routePlan
-          ? "Existing route kept. Click the map to set a new end point, then rebuild."
-          : "Click the map to set an end point."
+          ? "Existing route kept. Click the map to set a new end / turnaround direction, then rebuild."
+          : form.walkShape === "out_and_back"
+            ? "Click the map in the direction you want to walk, then build the out-and-back."
+            : "Click the map to set an end point."
         : routePlan
           ? "Start and end set. Rebuild to refresh the walking plan."
           : "Start and end set. Build the walking plan.";
@@ -408,8 +456,17 @@ function WorkoutPlannerClient() {
   ) {
     const startPoint = startRef.current;
     const endPoint = endRef.current;
-    if (!startPoint || !endPoint) {
-      setError("Pick both a start and end point on the map first.");
+    const shape = formRef.current.walkShape ?? "point_to_point";
+    if (!startPoint) {
+      setError("Pick a start point on the map first.");
+      return;
+    }
+    if (shape !== "loop" && !endPoint) {
+      setError(
+        shape === "out_and_back"
+          ? "Click a second map point for the out-and-back direction."
+          : "Pick both a start and end point on the map first.",
+      );
       return;
     }
 
@@ -428,7 +485,15 @@ function WorkoutPlannerClient() {
         },
         body: JSON.stringify({
           start: startPoint,
-          end: endPoint,
+          end: endPoint ?? startPoint,
+          direction: shape === "out_and_back" ? endPoint : undefined,
+          heading:
+            headingRef.current && startPoint
+              ? headingDegrees(startPoint, headingRef.current)
+              : undefined,
+          walkShape: shape,
+          targetMinutes: formRef.current.targetMinutes,
+          loopSeed: formRef.current.loopSeed,
           vias: orderedVias.map((via) => via.location),
           profile: formRef.current,
           includeOsmHazards: options?.includeOsmHazards !== false,
@@ -456,6 +521,22 @@ function WorkoutPlannerClient() {
         : [];
       if (snapped.length === orderedVias.length && orderedVias.length > 0) {
         commitViaPoints(applySnappedViaLocations(orderedVias, snapped));
+      }
+
+      const turnaround = result.turnaround as LatLng | undefined;
+      if (
+        turnaround &&
+        shape === "out_and_back" &&
+        !viaPointsRef.current.some((via) => via.id === TURNAROUND_VIA_ID)
+      ) {
+        commitViaPoints([
+          ...viaPointsRef.current,
+          {
+            id: TURNAROUND_VIA_ID,
+            location: turnaround,
+            sequence: Number(result.totalDistanceMeters ?? 0) / 2,
+          },
+        ]);
       }
 
       setRoutePlan(result as RoutePlan);
@@ -577,6 +658,42 @@ function WorkoutPlannerClient() {
       fit: true,
       includeOsmHazards: true,
     });
+  }
+
+  function handleShuffleLoop() {
+    const nextSeed = (formRef.current.loopSeed ?? 0) + 1;
+    const nextForm = { ...formRef.current, loopSeed: nextSeed };
+    formRef.current = nextForm;
+    setForm(nextForm);
+    void rebuildRoute(viaPointsRef.current, {
+      fit: true,
+      includeOsmHazards: true,
+    });
+  }
+
+  function handleUseMyLocation() {
+    if (!("geolocation" in navigator)) {
+      setError("This browser does not support geolocation.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const point = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+        setStart(point);
+        setCurrentPosition(point);
+        if (form.walkShape === "loop") {
+          setEnd(null);
+        }
+        setSaveNote("Start set from your current location.");
+      },
+      (geoError) => {
+        setError(geoError.message || "Could not read your location.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
   }
 
   function handleExportGpx() {
@@ -728,6 +845,53 @@ function WorkoutPlannerClient() {
             </p>
 
             <label className={styles.field}>
+              <span>Walk shape</span>
+              <select
+                value={form.walkShape}
+                onChange={(event) => {
+                  const walkShape = parseWalkShape(event.target.value);
+                  setForm((current) => ({ ...current, walkShape, loopSeed: 0 }));
+                  setHeadingPoint(null);
+                  setPickingEnabled(true);
+                }}
+              >
+                <option value="point_to_point">Point to point</option>
+                <option value="loop">Timed loop from start</option>
+                <option value="out_and_back">Timed out-and-back</option>
+              </select>
+            </label>
+            {form.walkShape !== "point_to_point" ? (
+              <>
+                <label className={styles.field}>
+                  <span>Target duration (minutes)</span>
+                  <input
+                    type="number"
+                    min="10"
+                    max="180"
+                    step="5"
+                    value={form.targetMinutes}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        targetMinutes: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <p className={styles.cardText}>
+                  {walkShapeLabel(form.walkShape)} aiming for about{" "}
+                  {formatDistance(
+                    targetDistanceMeters(
+                      form.targetMinutes,
+                      typicalWalkSpeedMps(form.minSpeedMps, form.maxSpeedMps),
+                    ),
+                  )}{" "}
+                  at your interval mix.
+                </p>
+              </>
+            ) : null}
+
+            <label className={styles.field}>
               <span>Long-route effort</span>
               <select
                 value={form.effortPreference}
@@ -749,7 +913,31 @@ function WorkoutPlannerClient() {
             </p>
 
             <button className={styles.primaryButton} onClick={handleBuildRoute} disabled={loading}>
-              {loading ? "Building route..." : "Build aerobic walking plan"}
+              {loading
+                ? "Building route..."
+                : form.walkShape === "loop"
+                  ? "Build timed loop"
+                  : form.walkShape === "out_and_back"
+                    ? "Build out-and-back"
+                    : "Build aerobic walking plan"}
+            </button>
+            {form.walkShape === "loop" ? (
+              <button
+                className={styles.secondaryButton}
+                onClick={handleShuffleLoop}
+                disabled={loading || !start}
+                type="button"
+              >
+                Shuffle another loop
+              </button>
+            ) : null}
+            <button
+              className={styles.secondaryButton}
+              onClick={handleUseMyLocation}
+              disabled={loading}
+              type="button"
+            >
+              Start from my location
             </button>
             <button
               className={styles.secondaryButton}
@@ -821,10 +1009,10 @@ function WorkoutPlannerClient() {
           <div className={styles.card}>
             <h2>Map steps</h2>
             <ol className={styles.steps}>
-              <li>Click the map once to set a start point.</li>
-              <li>Click a second time to set the destination.</li>
+              <li>Choose point-to-point, a timed loop, or a timed out-and-back.</li>
+              <li>Click start (and end or “this way” as needed), or use your location.</li>
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
-              <li>Build the route — the map stays interactive.</li>
+              <li>Build the route — the map stays interactive. Shuffle a loop to try another tour.</li>
               <li>Download GPX to walk it in another app or watch.</li>
               <li>Click the colored path (or drag a blue square) to dodge a blocked street.</li>
               <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
@@ -930,6 +1118,10 @@ function WorkoutPlannerClient() {
               onViaRemoved={handleViaRemoved}
               onHandleDropped={handleHandleDropped}
               onPathClicked={handlePathClicked}
+              headingPoint={form.walkShape === "loop" ? headingPoint : null}
+              endLabel={
+                form.walkShape === "out_and_back" ? "Turnaround toward" : "End"
+              }
               fitNonce={fitNonce}
               walkedPath={walkedPath}
               walkerOnPath={

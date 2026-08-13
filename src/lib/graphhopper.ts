@@ -4,6 +4,7 @@ import {
   routePreferenceLabel,
 } from "@/lib/route-preference";
 import { findNeglectedViaIndices } from "@/lib/via-points";
+import { loopTriangleWaypoints } from "@/lib/time-budget";
 import type { LatLng, RouteHazard, RoutePreference } from "@/types/workout";
 
 /**
@@ -317,6 +318,135 @@ async function requestRouteOnce(
     route: parsePath(data, vias.length),
     usedPreference,
     fallbackNote,
+  };
+}
+
+function buildRoundTripBody(
+  start: LatLng,
+  preference: RoutePreference,
+  distanceMeters: number,
+  seed: number,
+  heading?: number,
+  disableCh = true,
+) {
+  const customModel = disableCh ? buildRouteCustomModel(preference) : null;
+  return {
+    profile: "foot",
+    algorithm: "round_trip",
+    points: [[start.lng, start.lat]],
+    "round_trip.distance": Math.round(distanceMeters),
+    "round_trip.seed": seed,
+    elevation: true,
+    instructions: true,
+    calc_points: true,
+    points_encoded: false,
+    details: ["road_class"],
+    ...(disableCh ? { "ch.disable": true } : {}),
+    ...(heading != null && Number.isFinite(heading)
+      ? { headings: [Math.round(heading) % 360] }
+      : {}),
+    ...(customModel ? { custom_model: customModel } : {}),
+  };
+}
+
+async function requestRoundTrip(
+  apiKey: string,
+  start: LatLng,
+  preference: RoutePreference,
+  distanceMeters: number,
+  seed: number,
+  heading?: number,
+): Promise<{
+  route: ParsedRoute;
+  usedPreference: RoutePreference;
+  fallbackNote?: string;
+} | null> {
+  const attempts: Array<{
+    preference: RoutePreference;
+    disableCh: boolean;
+    heading?: number;
+  }> = [
+    { preference, disableCh: true, heading },
+    { preference: "default", disableCh: true, heading },
+    { preference: "default", disableCh: false },
+  ];
+
+  let lastMessage = "";
+  for (const attempt of attempts) {
+    const body = buildRoundTripBody(
+      start,
+      attempt.preference,
+      distanceMeters,
+      seed,
+      attempt.heading,
+      attempt.disableCh,
+    );
+    const { response, data } = await postGraphHopperRoute(apiKey, body);
+    if (response.ok) {
+      let fallbackNote: string | undefined;
+      if (attempt.preference !== preference) {
+        fallbackNote = `Route preference “${routePreferenceLabel(preference)}” was unavailable for the timed loop. Using the default walking profile.`;
+      }
+      return {
+        route: parsePath(data, 0),
+        usedPreference: attempt.preference,
+        fallbackNote,
+      };
+    }
+    lastMessage = data.message ?? data.hints?.[0]?.message ?? lastMessage;
+  }
+
+  void lastMessage;
+  return null;
+}
+
+/**
+ * Closed walking loop from start, targeting about distanceMeters.
+ * Tries GraphHopper round_trip, then a 3-point triangle (free-tier safe).
+ */
+export async function fetchLoopRoute(
+  start: LatLng,
+  preference: RoutePreference,
+  distanceMeters: number,
+  seed = 0,
+  heading?: number,
+) {
+  const apiKey = process.env.GRAPHOPPER_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GRAPHOPPER_KEY environment variable.");
+  }
+
+  const roundTrip = await requestRoundTrip(
+    apiKey,
+    start,
+    preference,
+    distanceMeters,
+    seed,
+    heading,
+  );
+  if (roundTrip) {
+    return {
+      points: roundTrip.route.points,
+      segments: roundTrip.route.segments,
+      instructions: roundTrip.route.instructions,
+      routeHazards: roundTrip.route.routeHazards,
+      snappedVias: [] as LatLng[],
+      usedPreference: roundTrip.usedPreference,
+      fallbackNote: roundTrip.fallbackNote,
+      chunkStats: { windows: 1, fetched: 1, cached: 0 },
+    };
+  }
+
+  const [viaA, viaB] = loopTriangleWaypoints(start, distanceMeters, heading ?? 0);
+  const fallback = await fetchWalkingRoute(start, start, preference, [viaA, viaB]);
+  return {
+    ...fallback,
+    fallbackNote: [
+      fallback.fallbackNote,
+      "GraphHopper round_trip was unavailable; built a triangular walking loop instead.",
+    ]
+      .filter(Boolean)
+      .join(" "),
   };
 }
 

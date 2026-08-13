@@ -1,4 +1,5 @@
 import type { EffortPreference, LatLng, RoutePlan, RoutePreference, WorkoutLevel } from "@/types/workout";
+import type { WalkShape } from "@/lib/time-budget";
 
 export type StoredPlannerForm = {
   age: number;
@@ -9,6 +10,9 @@ export type StoredPlannerForm = {
   maxSpeedMps: number;
   effortPreference: EffortPreference;
   routePreference: RoutePreference;
+  walkShape?: WalkShape;
+  targetMinutes?: number;
+  loopSeed?: number;
 };
 
 export type StoredPlannerState = {

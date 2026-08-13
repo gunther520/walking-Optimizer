@@ -1,15 +1,27 @@
 import { NextResponse } from "next/server";
 
-import { fetchWalkingRoute, MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
+import { fetchLoopRoute, fetchWalkingRoute, MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { buildRoutePlan } from "@/lib/optimizer";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { getDefaultSpeedBounds } from "@/lib/training";
+import {
+  outAndBackTurnaroundMeters,
+  parseWalkShape,
+  targetDistanceMeters,
+  typicalWalkSpeedMps,
+  type WalkShape,
+} from "@/lib/time-budget";
+import {
+  buildCumulativeDistances,
+  pointAtDistanceAlongRoute,
+} from "@/lib/via-points";
 import {
   dedupeHazards,
   filterHazardsOnPath,
   findOSMHazardsAlongRoute,
 } from "@/lib/osm-hazards";
 import type {
+  LatLng,
   RoutePreference,
   WorkoutLevel,
   WorkoutProfile,
@@ -17,8 +29,13 @@ import type {
 
 type RouteRequestBody = {
   start: { lat: number; lng: number };
-  end: { lat: number; lng: number };
+  end?: { lat: number; lng: number };
+  direction?: { lat: number; lng: number };
   vias?: Array<{ lat: number; lng: number }>;
+  walkShape?: WalkShape;
+  targetMinutes?: number;
+  loopSeed?: number;
+  heading?: number;
   /** Default true. Via-only rebuilds skip Overpass to save time and credits. */
   includeOsmHazards?: boolean;
   profile: {
@@ -69,7 +86,21 @@ export async function POST(request: Request) {
       routePreference,
     };
 
-    if (!body.start || !body.end) {
+    const walkShape = parseWalkShape(body.walkShape);
+    const targetMinutes = Number(body.targetMinutes ?? 40);
+    const loopSeed = Number(body.loopSeed ?? 0);
+    const heading =
+      typeof body.heading === "number" && Number.isFinite(body.heading)
+        ? body.heading
+        : undefined;
+
+    if (!body.start) {
+      return NextResponse.json(
+        { error: "A start point is required." },
+        { status: 400 },
+      );
+    }
+    if (walkShape !== "loop" && !body.end && !body.direction) {
       return NextResponse.json(
         { error: "Start and end points are required." },
         { status: 400 },
@@ -87,13 +118,90 @@ export async function POST(request: Request) {
       .slice(0, MAX_AVOIDANCE_VIAS);
 
     const includeOsmHazards = body.includeOsmHazards !== false;
-
-    const route = await fetchWalkingRoute(
-      body.start,
-      body.end,
-      routePreference,
-      vias,
+    const targetMeters = targetDistanceMeters(
+      targetMinutes,
+      typicalWalkSpeedMps(profile.minSpeedMps, profile.maxSpeedMps),
     );
+
+    type Routed = Awaited<ReturnType<typeof fetchWalkingRoute>>;
+    let route: Routed;
+    let turnaround: LatLng | undefined;
+    const shapeNotes: string[] = [];
+
+    if (walkShape === "loop") {
+      if (vias.length) {
+        route = await fetchWalkingRoute(body.start, body.start, routePreference, vias);
+        shapeNotes.push(
+          `Timed loop (~${Math.round(targetMinutes)} min) rebuilt through ${vias.length} via(s).`,
+        );
+      } else {
+        route = await fetchLoopRoute(
+          body.start,
+          routePreference,
+          targetMeters,
+          Number.isFinite(loopSeed) ? loopSeed : 0,
+          heading,
+        );
+        shapeNotes.push(`Timed loop targeting ~${Math.round(targetMinutes)} min.`);
+      }
+    } else if (walkShape === "out_and_back") {
+      const direction = body.direction ?? body.end;
+      if (!direction) {
+        return NextResponse.json(
+          { error: "Click a turnaround direction for the out-and-back walk." },
+          { status: 400 },
+        );
+      }
+      if (vias.length) {
+        route = await fetchWalkingRoute(body.start, body.start, routePreference, vias);
+        shapeNotes.push(
+          `Out-and-back (~${Math.round(targetMinutes)} min) rebuilt through ${vias.length} via(s).`,
+        );
+      } else {
+        const outbound = await fetchWalkingRoute(
+          body.start,
+          direction,
+          routePreference,
+          [],
+        );
+        const { totalMeters } = buildCumulativeDistances(outbound.segments);
+        const along = outAndBackTurnaroundMeters(totalMeters, targetMeters);
+        const hit = pointAtDistanceAlongRoute(outbound.segments, along);
+        if (!hit) {
+          return NextResponse.json(
+            { error: "Could not place a turnaround on that direction." },
+            { status: 400 },
+          );
+        }
+        turnaround = hit.location;
+        route = await fetchWalkingRoute(
+          body.start,
+          body.start,
+          routePreference,
+          [hit.location],
+        );
+        const short =
+          totalMeters * 2 + 1 < targetMeters * 0.85
+            ? ` Direction is shorter than the time budget — pick a farther point or use a loop.`
+            : "";
+        shapeNotes.push(
+          `Out-and-back targeting ~${Math.round(targetMinutes)} min.${short}`,
+        );
+      }
+    } else {
+      if (!body.end) {
+        return NextResponse.json(
+          { error: "Start and end points are required." },
+          { status: 400 },
+        );
+      }
+      route = await fetchWalkingRoute(
+        body.start,
+        body.end,
+        routePreference,
+        vias,
+      );
+    }
 
     // Never block the walk plan on Overpass — GraphHopper hazards alone are enough.
     // Via-only rebuilds skip Overpass: stairs still come from GraphHopper road_class.
@@ -151,6 +259,7 @@ export async function POST(request: Request) {
 
     const preferenceNotes = [
       `Path preference: ${routePreferenceLabel(route.usedPreference)}`,
+      ...shapeNotes,
       ...(vias.length
         ? [
             `Avoidance vias: ${vias.length} waypoint(s) forced into the path` +
@@ -172,6 +281,8 @@ export async function POST(request: Request) {
       usedRoutePreference: route.usedPreference,
       snappedVias: route.snappedVias,
       chunkStats: route.chunkStats,
+      turnaround,
+      walkShape,
       instructionSummary: [
         ...preferenceNotes,
         ...degradedNote,

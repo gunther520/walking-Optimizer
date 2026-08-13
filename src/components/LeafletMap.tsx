@@ -45,6 +45,8 @@ type LeafletMapProps = {
   walkerOnPath?: LatLng | null;
   /** Click the planned path to drop an avoidance via off that street. */
   onPathClicked?: (point: LatLng) => void;
+  headingPoint?: LatLng | null;
+  endLabel?: string;
 };
 
 function ClickHandler({
@@ -291,6 +293,8 @@ export function LeafletMap({
   walkedPath = [],
   walkerOnPath = null,
   onPathClicked,
+  headingPoint = null,
+  endLabel = "End",
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -488,7 +492,18 @@ export function LeafletMap({
       {end ? (
         <CircleMarker center={[end.lat, end.lng]} radius={9} pathOptions={{ color: "#dc2626" }}>
           <Tooltip direction="top" offset={[0, -10]} permanent>
-            End
+            {endLabel}
+          </Tooltip>
+        </CircleMarker>
+      ) : null}
+      {headingPoint ? (
+        <CircleMarker
+          center={[headingPoint.lat, headingPoint.lng]}
+          radius={8}
+          pathOptions={{ color: "#7c3aed", fillColor: "#7c3aed", fillOpacity: 0.9 }}
+        >
+          <Tooltip direction="top" offset={[0, -10]} permanent>
+            This way
           </Tooltip>
         </CircleMarker>
       ) : null}
