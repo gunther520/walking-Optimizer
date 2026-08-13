@@ -4,7 +4,9 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { WalkHud } from "@/components/WalkHud";
+import { ElevationProfileChart } from "@/components/ElevationProfile";
 import { downloadRouteGpx } from "@/lib/gpx";
+import { buildElevationProfile } from "@/lib/elevation-profile";
 import {
   headingDegrees,
   parseWalkShape,
@@ -342,6 +344,7 @@ function WorkoutPlannerClient() {
 
     const uphillCount = routePlan.segments.filter((segment) => segment.grade > 0.03).length;
     const downhillCount = routePlan.segments.filter((segment) => segment.grade < -0.03).length;
+    const elevation = buildElevationProfile(routePlan);
 
     return [
       {
@@ -357,8 +360,10 @@ function WorkoutPlannerClient() {
         value: `${routePlan.zoneBand.minHr}-${routePlan.zoneBand.maxHr} bpm`,
       },
       {
-        label: "Terrain shifts",
-        value: `${uphillCount} uphill / ${downhillCount} downhill`,
+        label: "Climb / descent",
+        value: elevation.hasElevation
+          ? `+${Math.round(elevation.gainMeters)} / −${Math.round(elevation.lossMeters)} m`
+          : `${uphillCount} up / ${downhillCount} down`,
       },
     ];
   }, [routePlan]);
@@ -1180,6 +1185,13 @@ function WorkoutPlannerClient() {
                 </div>
               ))}
             </div>
+
+            {routePlan ? (
+              <ElevationProfileChart
+                plan={routePlan}
+                alongMeters={alongProgress?.alongMeters ?? 0}
+              />
+            ) : null}
 
             {routePlan ? (
               <div className={styles.card}>
