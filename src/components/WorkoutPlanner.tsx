@@ -43,6 +43,15 @@ import {
   saveWalk,
   type SavedWalk,
 } from "@/lib/saved-walks";
+import {
+  compareToPrevious,
+  deleteWalkLog,
+  formatPlanDelta,
+  listWalkLogs,
+  saveWalkLog,
+  type WalkFinishRecord,
+  type WalkFinishStats,
+} from "@/lib/walk-log";
 import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 import {
   applySnappedViaLocations,
@@ -249,6 +258,8 @@ function WorkoutPlannerClient() {
   );
   const [savedWalks, setSavedWalks] = useState<SavedWalk[]>(() => listSavedWalks());
   const [saveName, setSaveName] = useState("");
+  const [walkLogs, setWalkLogs] = useState<WalkFinishRecord[]>(() => listWalkLogs());
+  const [finishNote, setFinishNote] = useState<string | null>(null);
   const [followWalker, setFollowWalker] = useState(true);
   const [followNonce, setFollowNonce] = useState(0);
   const [gpsHeadingDeg, setGpsHeadingDeg] = useState<number | null>(null);
@@ -934,6 +945,35 @@ function WorkoutPlannerClient() {
     );
   }
 
+  function handleWalkFinished(stats: WalkFinishStats) {
+    if (!routePlan) return;
+    const result = saveWalkLog({
+      ...stats,
+      name:
+        saveName.trim() ||
+        defaultSavedWalkName(routePlan, form.walkShape),
+      walkShape: form.walkShape,
+    });
+    if (!result) {
+      setSaveNote("Could not save this finish to history (storage may be full).");
+      return;
+    }
+    const logs = listWalkLogs();
+    setWalkLogs(logs);
+    const vsPrevious = compareToPrevious(result.record, logs);
+    setFinishNote(vsPrevious);
+    setSaveNote(
+      `Logged this finish${vsPrevious ? ` — ${vsPrevious}` : ""}. Recent finishes stay on this device.`,
+    );
+  }
+
+  function handleDeleteWalkLog(id: string) {
+    const log = walkLogs.find((item) => item.id === id);
+    deleteWalkLog(id);
+    setWalkLogs(listWalkLogs());
+    setSaveNote(log ? `Removed finish “${log.name}”.` : "Removed finish.");
+  }
+
   function handleEnableGps() {
     setGpsConsent(true);
     setFollowWalker(true);
@@ -1298,6 +1338,47 @@ function WorkoutPlannerClient() {
           </div>
 
           <div className={styles.card}>
+            <h2>Recent finishes</h2>
+            <p className={styles.cardText}>
+              Completing a walk saves time, splits, and estimated kcal on this device.
+              PC demo speed (10×) is not logged.
+            </p>
+            {walkLogs.length ? (
+              <div className={styles.savedWalkList}>
+                {walkLogs.map((log) => (
+                  <div key={log.id} className={styles.savedWalkRow}>
+                    <div>
+                      <strong>{log.name}</strong>
+                      <span>
+                        {new Date(log.finishedAt).toLocaleString()} ·{" "}
+                        {formatDistance(log.distanceMeters)} ·{" "}
+                        {formatDuration(log.elapsedSeconds)} (
+                        {formatPlanDelta(log.elapsedSeconds, log.plannedSeconds)})
+                        {" · ~"}
+                        {log.kcal} kcal
+                      </span>
+                    </div>
+                    <div className={styles.savedWalkActions}>
+                      <button
+                        type="button"
+                        className={styles.savedWalkButton}
+                        onClick={() => handleDeleteWalkLog(log.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.pickHint}>
+                Finish a walk to start a history. Load a saved plan anytime — this list is
+                results, not routes.
+              </p>
+            )}
+          </div>
+
+          <div className={styles.card}>
             <h2>Live GPS</h2>
             <p className={styles.cardText}>
               Location is optional and only used in this browser to match you to the
@@ -1345,6 +1426,7 @@ function WorkoutPlannerClient() {
               <li>Press “Change start & end” if you need new endpoints.</li>
               <li>Optionally enable GPS for live pace guidance on the path. Recenter follows you; drag the map to look around.</li>
               <li>Kilometer ticks mark the path. Walk mode records split times and a finish summary.</li>
+              <li>Finishing a walk (not 10× demo) saves it under Recent finishes.</li>
             </ol>
           </div>
 
@@ -1423,6 +1505,8 @@ function WorkoutPlannerClient() {
               gpsEnabled={gpsConsent && currentPosition != null}
               distanceToRouteMeters={liveStats?.distanceToRouteMeters ?? null}
               weightKg={form.weightKg}
+              finishNote={finishNote}
+              onWalkFinished={handleWalkFinished}
             />
           ) : null}
 

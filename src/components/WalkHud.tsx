@@ -24,6 +24,7 @@ import {
   type AlongPathProgress,
 } from "@/lib/walk-along";
 import { isOnRoute, offPathMessage } from "@/lib/walk-follow";
+import { formatPlanDelta, type WalkFinishStats } from "@/lib/walk-log";
 import {
   buildSplitMarkers,
   completedSplitStats,
@@ -47,6 +48,8 @@ type WalkHudProps = {
   gpsEnabled?: boolean;
   distanceToRouteMeters?: number | null;
   weightKg?: number;
+  finishNote?: string | null;
+  onWalkFinished?: (stats: WalkFinishStats) => void;
 };
 
 const DEMO_SPEED = 10;
@@ -78,6 +81,8 @@ export function WalkHud({
   gpsEnabled = false,
   distanceToRouteMeters = null,
   weightKg = 68,
+  finishNote = null,
+  onWalkFinished,
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
@@ -92,6 +97,9 @@ export function WalkHud({
   const lastRoleRef = useRef<string | null>(null);
   const lastSpokenTurnRef = useRef<number | null>(null);
   const lastOffPathRef = useRef<boolean | null>(null);
+  const reportedFinishRef = useRef(false);
+  const onWalkFinishedRef = useRef(onWalkFinished);
+  onWalkFinishedRef.current = onWalkFinished;
   const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
 
   useEffect(() => {
@@ -102,6 +110,7 @@ export function WalkHud({
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
     lastOffPathRef.current = null;
+    reportedFinishRef.current = false;
     setFinished(false);
     setCrossings([]);
     setLastCueNote(null);
@@ -281,7 +290,26 @@ export function WalkHud({
     setWalking(false);
     if (voiceOn) speakWalkCue("Walk complete");
     setLastCueNote("Walk complete");
-  }, [walking, finished, along, voiceOn]);
+    if (demoFast || reportedFinishRef.current) return;
+    reportedFinishRef.current = true;
+    onWalkFinishedRef.current?.({
+      distanceMeters: along.alongMeters,
+      elapsedSeconds,
+      plannedSeconds: routePlan.estimatedDurationSeconds,
+      kcal,
+      splits: completedSplits,
+    });
+  }, [
+    walking,
+    finished,
+    along,
+    voiceOn,
+    demoFast,
+    elapsedSeconds,
+    routePlan.estimatedDurationSeconds,
+    kcal,
+    completedSplits,
+  ]);
 
   useEffect(() => {
     if (!walking || typeof navigator === "undefined" || !("wakeLock" in navigator)) {
@@ -319,6 +347,7 @@ export function WalkHud({
       lastRoleRef.current = null;
       lastSpokenTurnRef.current = null;
       lastOffPathRef.current = null;
+      reportedFinishRef.current = false;
       setFinished(false);
       setCrossings([]);
     }
@@ -354,6 +383,7 @@ export function WalkHud({
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
     lastOffPathRef.current = null;
+    reportedFinishRef.current = false;
     setFinished(false);
     setCrossings([]);
     setLastCueNote(null);
@@ -478,10 +508,21 @@ export function WalkHud({
             <p>
               {formatDuration(elapsedSeconds)} elapsed · plan{" "}
               {formatDuration(Math.round(routePlan.estimatedDurationSeconds))}
+              {" · "}
+              {formatPlanDelta(
+                elapsedSeconds,
+                routePlan.estimatedDurationSeconds,
+              )}
             </p>
             <p>
               {formatDistance(along.alongMeters)} · ~{kcal} kcal
             </p>
+            {finishNote ? <p>{finishNote}</p> : null}
+            {demoFast ? (
+              <p className={styles.walkSplitList}>
+                PC demo finishes are not saved to history.
+              </p>
+            ) : null}
             {completedSplits.length ? (
               <p className={styles.walkSplitList}>
                 {completedSplits
