@@ -389,6 +389,39 @@
   cursor: not-allowed;
 }
 
+.mapTurnBanner {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  z-index: 500;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(36, 85, 214, 0.92);
+  color: #fff;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(16, 33, 58, 0.28);
+}
+
+.mapTurnBanner strong {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.mapTurnBanner span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mapTurnBannerApproaching {
+  background: rgba(234, 88, 12, 0.94);
+}
+
 .elevationCard {
   padding: 18px 20px 14px;
   background: var(--card);
