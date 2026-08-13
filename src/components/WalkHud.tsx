@@ -10,6 +10,14 @@ import {
   playIntervalCue,
 } from "@/lib/pace-style";
 import { formatDistance, formatDuration } from "@/lib/route-math";
+import {
+  shouldAnnounceTurn,
+  spokenRoleText,
+  spokenTurnText,
+  speakWalkCue,
+  stopWalkSpeech,
+  upcomingTurn,
+} from "@/lib/turns";
 import type { PaceRole, RoutePlan } from "@/types/workout";
 import {
   getAlongPathProgress,
@@ -28,6 +36,24 @@ type WalkHudProps = {
 };
 
 const DEMO_SPEED = 10;
+const VOICE_STORAGE_KEY = "walking-optimizer:voice";
+
+function readVoicePref() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(VOICE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeVoicePref(on: boolean) {
+  try {
+    window.localStorage.setItem(VOICE_STORAGE_KEY, on ? "1" : "0");
+  } catch {
+    // Private mode — ignore.
+  }
+}
 
 export function WalkHud({
   routePlan,
@@ -38,12 +64,14 @@ export function WalkHud({
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
+  const [voiceOn, setVoiceOn] = useState(readVoicePref);
   const [demoFast, setDemoFast] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [lastCueNote, setLastCueNote] = useState<string | null>(null);
   const pausedElapsedRef = useRef(0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
+  const lastSpokenTurnRef = useRef<number | null>(null);
   const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
 
   useEffect(() => {
@@ -52,7 +80,9 @@ export function WalkHud({
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
     lastRoleRef.current = null;
+    lastSpokenTurnRef.current = null;
     setLastCueNote(null);
+    stopWalkSpeech();
   }, [routeId]);
 
   useEffect(() => {
@@ -97,6 +127,10 @@ export function WalkHud({
     [routePlan, elapsedSeconds, onRoute, currentPosition],
   );
   const role = progress.block?.paceRole ?? null;
+  const nextTurn = upcomingTurn(routePlan.turns ?? [], along.alongMeters);
+  const metersToTurn = nextTurn
+    ? Math.max(0, nextTurn.alongMeters - along.alongMeters)
+    : null;
 
   useEffect(() => {
     onAlongProgress?.(along);
@@ -107,33 +141,60 @@ export function WalkHud({
   }, [onAlongProgress]);
 
   useEffect(() => {
-    if (!walking || !cuesOn || !role) return;
+    if (!walking || !role) return;
     if (lastRoleRef.current === role) return;
     if (lastRoleRef.current != null) {
-      playIntervalCue(role);
-      setLastCueNote(
-        `Cue played: switch to ${paceRoleLabel(role)} (${pacePatternName(role)})`,
-      );
+      if (cuesOn) {
+        playIntervalCue(role);
+        setLastCueNote(
+          `Cue played: switch to ${paceRoleLabel(role)} (${pacePatternName(role)})`,
+        );
+      }
+      if (voiceOn) {
+        speakWalkCue(spokenRoleText(role));
+        if (!cuesOn) setLastCueNote(spokenRoleText(role));
+      }
     }
     lastRoleRef.current = role;
-  }, [walking, cuesOn, role]);
+  }, [walking, cuesOn, voiceOn, role]);
+
+  useEffect(() => {
+    if (!walking || !voiceOn || !nextTurn) return;
+    if (!shouldAnnounceTurn(nextTurn, along.alongMeters)) return;
+    if (lastSpokenTurnRef.current === nextTurn.alongMeters) return;
+    lastSpokenTurnRef.current = nextTurn.alongMeters;
+    const phrase = spokenTurnText(nextTurn, along.alongMeters);
+    speakWalkCue(phrase);
+    setLastCueNote(phrase);
+  }, [walking, voiceOn, nextTurn, along.alongMeters]);
 
   function handleStart() {
     if (elapsedSeconds === 0) {
       lastRoleRef.current = null;
+      lastSpokenTurnRef.current = null;
     }
     setWalking(true);
-    if (cuesOn && progress.block && lastRoleRef.current == null) {
-      playIntervalCue(progress.block.paceRole);
+    if (progress.block && lastRoleRef.current == null) {
+      if (cuesOn) {
+        playIntervalCue(progress.block.paceRole);
+      }
+      if (voiceOn) {
+        speakWalkCue(spokenRoleText(progress.block.paceRole));
+      }
       lastRoleRef.current = progress.block.paceRole;
-      setLastCueNote(
-        `Cue played: start ${paceRoleLabel(progress.block.paceRole)}`,
-      );
+      if (cuesOn || voiceOn) {
+        setLastCueNote(
+          voiceOn
+            ? spokenRoleText(progress.block.paceRole)
+            : `Cue played: start ${paceRoleLabel(progress.block.paceRole)}`,
+        );
+      }
     }
   }
 
   function handlePause() {
     setWalking(false);
+    stopWalkSpeech();
   }
 
   function handleReset() {
@@ -142,14 +203,30 @@ export function WalkHud({
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
     lastRoleRef.current = null;
+    lastSpokenTurnRef.current = null;
     setLastCueNote(null);
+    stopWalkSpeech();
   }
 
   function handleTestCue(nextRole: PaceRole = "push") {
     playIntervalCue(nextRole);
+    if (voiceOn) {
+      speakWalkCue(spokenRoleText(nextRole));
+    }
     setLastCueNote(
-      `Test cue: ${paceRoleLabel(nextRole)} beep (vibration needs a phone)`,
+      `Test cue: ${paceRoleLabel(nextRole)} beep${voiceOn ? " + voice" : ""} (vibration needs a phone)`,
     );
+  }
+
+  function handleVoiceToggle(on: boolean) {
+    setVoiceOn(on);
+    writeVoicePref(on);
+    if (on) {
+      speakWalkCue("Voice on. I will call out turns and interval changes.");
+      setLastCueNote("Voice on — turns and interval changes will be spoken.");
+    } else {
+      stopWalkSpeech();
+    }
   }
 
   const roleClass =
@@ -163,14 +240,24 @@ export function WalkHud({
     <div className={styles.walkHud}>
       <div className={styles.walkHudHeader}>
         <h2>Walk mode</h2>
-        <label className={styles.cueToggle}>
-          <input
-            type="checkbox"
-            checked={cuesOn}
-            onChange={(event) => setCuesOn(event.target.checked)}
-          />
-          Sound cues
-        </label>
+        <div className={styles.walkHudToggles}>
+          <label className={styles.cueToggle}>
+            <input
+              type="checkbox"
+              checked={cuesOn}
+              onChange={(event) => setCuesOn(event.target.checked)}
+            />
+            Sound cues
+          </label>
+          <label className={styles.cueToggle}>
+            <input
+              type="checkbox"
+              checked={voiceOn}
+              onChange={(event) => handleVoiceToggle(event.target.checked)}
+            />
+            Voice
+          </label>
+        </div>
       </div>
 
       <p className={styles.walkHudStatus}>
@@ -178,7 +265,7 @@ export function WalkHud({
           ? "Tracking GPS on the route — intervals follow your position."
           : demoFast
             ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
-            : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep fires when the role changes."}
+            : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
       </p>
 
       <div className={`${styles.walkHudMain} ${roleClass}`}>
@@ -209,6 +296,13 @@ export function WalkHud({
           {" · "}
           {formatDistance(along.remainingMeters)} remaining
         </p>
+        {nextTurn ? (
+          <p className={styles.walkNextTurn}>
+            Next turn in {formatDistance(metersToTurn ?? 0)}: {nextTurn.text}
+          </p>
+        ) : walking ? (
+          <p className={styles.walkNextTurn}>No further turns — continue to the finish.</p>
+        ) : null}
         <div className={styles.walkHudCountdown}>
           {formatDuration(Math.round(progress.remainingSeconds))}
           <span>left until next role change / cue</span>

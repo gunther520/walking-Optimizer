@@ -8,6 +8,14 @@ import { ElevationProfileChart } from "@/components/ElevationProfile";
 import { downloadRouteGpx } from "@/lib/gpx";
 import { buildElevationProfile } from "@/lib/elevation-profile";
 import {
+  applyShareToHistory,
+  buildShareSearch,
+  headingPointFromShare,
+  parseShareSearch,
+  shareUrlFromState,
+} from "@/lib/share-url";
+import { isSilentTurn } from "@/lib/turns";
+import {
   headingDegrees,
   parseWalkShape,
   targetDistanceMeters,
@@ -120,36 +128,65 @@ function subscribeNoop() {
 
 function createInitialFromStorage() {
   const stored = loadPlannerState();
-  if (!stored) {
-    return {
-      form: DEFAULT_FORM,
-      start: null as LatLng | null,
-      end: null as LatLng | null,
-      routePlan: null as RoutePlan | null,
-      pickingEnabled: true,
-      gpsConsent: false,
-      viaPoints: [] as ViaWaypoint[],
-      saveNote: null as string | null,
-    };
-  }
+  const shared = parseShareSearch(window.location.search);
+  const fromStorage = stored
+    ? {
+        form: {
+          ...DEFAULT_FORM,
+          ...stored.form,
+          effortPreference: stored.form.effortPreference ?? "balanced",
+          routePreference: stored.form.routePreference ?? "default",
+          walkShape: parseWalkShape(stored.form.walkShape),
+          targetMinutes: Number(stored.form.targetMinutes ?? 40),
+          loopSeed: Number(stored.form.loopSeed ?? 0),
+        },
+        start: stored.start,
+        end: stored.end,
+        headingPoint: null as LatLng | null,
+        routePlan: stored.routePlan,
+        pickingEnabled: !(stored.routePlan && stored.mapLocked === true),
+        gpsConsent: Boolean(stored.gpsConsent),
+        viaPoints: normalizeViaPoints(stored.viaPoints ?? []),
+        saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
+      }
+    : {
+        form: DEFAULT_FORM,
+        start: null as LatLng | null,
+        end: null as LatLng | null,
+        headingPoint: null as LatLng | null,
+        routePlan: null as RoutePlan | null,
+        pickingEnabled: true,
+        gpsConsent: false,
+        viaPoints: [] as ViaWaypoint[],
+        saveNote: null as string | null,
+      };
+
+  if (!shared) return fromStorage;
 
   return {
     form: {
-      ...DEFAULT_FORM,
-      ...stored.form,
-      effortPreference: stored.form.effortPreference ?? "balanced",
-      routePreference: stored.form.routePreference ?? "default",
-      walkShape: parseWalkShape(stored.form.walkShape),
-      targetMinutes: Number(stored.form.targetMinutes ?? 40),
-      loopSeed: Number(stored.form.loopSeed ?? 0),
+      ...fromStorage.form,
+      walkShape: shared.walkShape,
+      targetMinutes: shared.targetMinutes,
+      loopSeed: shared.loopSeed,
+      routePreference: shared.routePreference,
     },
-    start: stored.start,
-    end: stored.end,
-    routePlan: stored.routePlan,
-    pickingEnabled: !(stored.routePlan && stored.mapLocked === true),
-    gpsConsent: Boolean(stored.gpsConsent),
-    viaPoints: normalizeViaPoints(stored.viaPoints ?? []),
-    saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
+    start: shared.start,
+    end: shared.end,
+    headingPoint: headingPointFromShare(shared.start, shared.headingDeg),
+    // Shared links do not auto-rebuild — GraphHopper credits are spent on Build.
+    routePlan: null as RoutePlan | null,
+    pickingEnabled: true,
+    gpsConsent: fromStorage.gpsConsent,
+    viaPoints: normalizeViaPoints(
+      shared.vias.map((location, index) => ({
+        id: `via-share-${index}`,
+        location,
+        sequence: index,
+      })),
+    ),
+    saveNote:
+      "Opened a shared walk. Build the route when you are ready (uses GraphHopper credits).",
   };
 }
 
@@ -193,7 +230,9 @@ function WorkoutPlannerClient() {
   const [viaHistory, setViaHistory] = useState<ViaHistory>(emptyViaHistory());
   const [pickingEnabled, setPickingEnabled] = useState(initial.pickingEnabled);
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
-  const [headingPoint, setHeadingPoint] = useState<LatLng | null>(null);
+  const [headingPoint, setHeadingPoint] = useState<LatLng | null>(
+    initial.headingPoint,
+  );
   const [alongProgress, setAlongProgress] = useState<AlongPathProgress | null>(
     null,
   );
@@ -256,6 +295,32 @@ function WorkoutPlannerClient() {
       viaPoints,
     });
   }, [form, start, end, routePlan, pickingEnabled, gpsConsent, viaPoints]);
+
+  useEffect(() => {
+    const headingDeg =
+      start && headingPoint ? headingDegrees(start, headingPoint) : null;
+    applyShareToHistory(
+      buildShareSearch({
+        start,
+        end,
+        headingDeg,
+        vias: sortViasBySequence(viaPoints).map((via) => via.location),
+        walkShape: form.walkShape,
+        targetMinutes: form.targetMinutes,
+        loopSeed: form.loopSeed,
+        routePreference: form.routePreference,
+      }),
+    );
+  }, [
+    start,
+    end,
+    headingPoint,
+    viaPoints,
+    form.walkShape,
+    form.targetMinutes,
+    form.loopSeed,
+    form.routePreference,
+  ]);
 
   useEffect(() => {
     if (!gpsConsent || !routePlan || !("geolocation" in navigator)) {
@@ -711,6 +776,39 @@ function WorkoutPlannerClient() {
     setSaveNote("Downloaded GPX for this walking route.");
   }
 
+  async function handleCopyLink() {
+    if (!start) {
+      setSaveNote("Set a start point before copying a share link.");
+      return;
+    }
+    const headingDeg =
+      headingPoint && start ? headingDegrees(start, headingPoint) : null;
+    const shareInput = {
+      start,
+      end,
+      headingDeg,
+      vias: sortViasBySequence(viaPoints).map((via) => via.location),
+      walkShape: form.walkShape,
+      targetMinutes: form.targetMinutes,
+      loopSeed: form.loopSeed,
+      routePreference: form.routePreference,
+    };
+    const url = shareUrlFromState(
+      window.location.origin,
+      window.location.pathname,
+      shareInput,
+    );
+    try {
+      await navigator.clipboard.writeText(url);
+      applyShareToHistory(buildShareSearch(shareInput));
+      setSaveNote(
+        "Link copied. It opens this start, end, and vias — they still need to Build (GraphHopper credits).",
+      );
+    } catch {
+      setError("Could not copy the link. Copy the address bar instead.");
+    }
+  }
+
   function handleEnableGps() {
     setGpsConsent(true);
     setError(null);
@@ -951,6 +1049,14 @@ function WorkoutPlannerClient() {
               type="button"
             >
               Download GPX
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleCopyLink}
+              disabled={!start}
+              type="button"
+            >
+              Copy share link
             </button>
             <button
               className={styles.secondaryButton}
@@ -1254,9 +1360,24 @@ function WorkoutPlannerClient() {
                     );
                   })}
                 </div>
+                {routePlan.turns?.some((turn) => !isSilentTurn(turn)) ? (
+                  <div className={styles.instructions}>
+                    <h3>Turn-by-turn</h3>
+                    <ul>
+                      {routePlan.turns
+                        .filter((turn) => !isSilentTurn(turn))
+                        .slice(0, 10)
+                        .map((turn, idx) => (
+                          <li key={`${turn.alongMeters}-${idx}`}>
+                            {formatDistance(turn.alongMeters)}: {turn.text}
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {routePlan.instructionSummary.length ? (
                   <div className={styles.instructions}>
-                    <h3>Route instructions</h3>
+                    <h3>Route notes</h3>
                     <ul>
                       {routePlan.instructionSummary.slice(0, 6).map((instruction, idx) => (
                         <li key={`${instruction}-${idx}`}>{instruction}</li>

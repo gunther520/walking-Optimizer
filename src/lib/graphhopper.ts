@@ -3,9 +3,15 @@ import {
   buildRouteCustomModel,
   routePreferenceLabel,
 } from "@/lib/route-preference";
-import { findNeglectedViaIndices } from "@/lib/via-points";
+import {
+  instructionTexts,
+  isSilentTurn,
+  offsetTurns,
+  parseGraphHopperTurns,
+} from "@/lib/turns";
+import { buildCumulativeDistances, findNeglectedViaIndices } from "@/lib/via-points";
 import { loopTriangleWaypoints } from "@/lib/time-budget";
-import type { LatLng, RouteHazard, RoutePreference } from "@/types/workout";
+import type { LatLng, RouteHazard, RoutePreference, RouteTurn } from "@/types/workout";
 
 /**
  * GraphHopper Free plan allows at most 5 routing locations per request
@@ -96,7 +102,13 @@ type GraphHopperPath = {
   snapped_waypoints?: {
     coordinates: [number, number, number?][];
   };
-  instructions?: { text: string }[];
+  instructions?: {
+    text?: string;
+    street_name?: string;
+    distance?: number;
+    sign?: number;
+    interval?: [number, number] | number[];
+  }[];
   details?: {
     road_class?: PathDetail[];
   };
@@ -112,6 +124,7 @@ type ParsedRoute = {
   points: LatLng[];
   segments: ReturnType<typeof buildSegments>;
   instructions: string[];
+  turns: RouteTurn[];
   routeHazards: RouteHazard[];
   snappedVias: LatLng[];
 };
@@ -265,14 +278,13 @@ function parsePath(data: GraphHopperResponse, viaCount: number): ParsedRoute {
         ? snappedAll
         : [];
 
-  const instructions =
-    path.instructions?.map((instruction) => instruction.text).filter(Boolean) ??
-    [];
+  const turns = parseGraphHopperTurns(path.instructions, points);
 
   return {
     points,
     segments: buildSegments(points),
-    instructions,
+    instructions: instructionTexts(turns),
+    turns,
     routeHazards: stairsOnRouteFromRoadClass(points, path.details?.road_class),
     snappedVias,
   };
@@ -429,6 +441,7 @@ export async function fetchLoopRoute(
       points: roundTrip.route.points,
       segments: roundTrip.route.segments,
       instructions: roundTrip.route.instructions,
+      turns: roundTrip.route.turns,
       routeHazards: roundTrip.route.routeHazards,
       snappedVias: [] as LatLng[],
       usedPreference: roundTrip.usedPreference,
@@ -475,12 +488,14 @@ async function requestRouteChunked(
   const windows = buildLocationWindows(stops.length, maxLocationsPerRequest);
   const allPoints: LatLng[] = [];
   const allInstructions: string[] = [];
+  const allTurns: RouteTurn[] = [];
   const allHazards: RouteHazard[] = [];
   const snappedByStopIndex = new Map<number, LatLng>();
   let usedPreference: RoutePreference = preference;
   let fallbackNote: string | undefined;
   let fetched = 0;
   let cached = 0;
+  let walkedSoFar = 0;
 
   for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
     const { from, to } = windows[windowIndex];
@@ -538,7 +553,19 @@ async function requestRouteChunked(
     }
 
     allInstructions.push(...leg.route.instructions);
+    const shiftedTurns = offsetTurns(leg.route.turns, walkedSoFar);
+    if (
+      windowIndex > 0 &&
+      shiftedTurns[0] &&
+      isSilentTurn(shiftedTurns[0]) &&
+      shiftedTurns[0].alongMeters <= walkedSoFar + 1
+    ) {
+      allTurns.push(...shiftedTurns.slice(1));
+    } else {
+      allTurns.push(...shiftedTurns);
+    }
     allHazards.push(...leg.route.routeHazards);
+    walkedSoFar += buildCumulativeDistances(leg.route.segments).totalMeters;
   }
 
   const snappedVias = vias.map((_, index) => {
@@ -557,6 +584,7 @@ async function requestRouteChunked(
       points: allPoints,
       segments,
       instructions: allInstructions,
+      turns: allTurns,
       routeHazards,
       snappedVias,
     },
@@ -706,6 +734,7 @@ export async function fetchWalkingRoute(
     points: route.points,
     segments: route.segments,
     instructions: route.instructions,
+    turns: route.turns,
     routeHazards: route.routeHazards,
     snappedVias: route.snappedVias,
     usedPreference,

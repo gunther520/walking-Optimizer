@@ -8,6 +8,7 @@ import {
   zoneLabelForRole,
 } from "@/lib/training";
 import { buildSegments, densifyRoutePoints, getNearestSegmentMatch } from "@/lib/route-math";
+import { isSilentTurn } from "@/lib/turns";
 import type {
   OSMHazardKind,
   PaceBlockSummary,
@@ -15,6 +16,7 @@ import type {
   RouteHazard,
   RoutePlan,
   RouteSegment,
+  RouteTurn,
   SegmentPlan,
   WorkoutProfile,
   LatLng,
@@ -365,6 +367,7 @@ export function buildRoutePlan(
   instructions: string[],
   profile: WorkoutProfile,
   hazards: RouteHazard[],
+  turns: RouteTurn[] = [],
 ): RoutePlan {
   // Densify first so 180s/60s targets are enforceable.
   const densifiedPoints = densifyRoutePoints(points, DENSIFY_STEP_METERS);
@@ -468,6 +471,13 @@ export function buildRoutePlan(
   const steadyHr = targetHrForRole("steady", profile, effortScale);
   const restHr = targetHrForRole("rest", profile, effortScale);
   const effortPct = Math.round(effortScale * 100);
+  const turnLines = turns
+    .filter((turn) => !isSilentTurn(turn))
+    .slice(0, 8)
+    .map((turn) => turn.text);
+  const instructionLines = turnLines.length
+    ? turnLines
+    : instructions.slice(0, 8);
 
   // Silence unused original segments param contract (callers still pass GH segments).
   void segments;
@@ -479,6 +489,7 @@ export function buildRoutePlan(
     paceBlocks,
     zoneBand,
     hazards: remappedHazards,
+    turns,
     totalDistanceMeters,
     estimatedDurationSeconds,
     instructionSummary: [
@@ -487,7 +498,7 @@ export function buildRoutePlan(
       `Pair timing target 75/25 (~${PUSH_SECONDS}s push / ~${RECOVERY_SECONDS}s recovery). Actual push share ~${pushShare}%`,
       `Blocks: ${pushCount} push / ${steadyCount} steady / ${restCount} rest · push ~${Math.round(pushMeters)} m / ~${Math.round(pushSeconds)} s`,
       ...hazardSummary,
-      ...instructions,
+      ...instructionLines,
     ],
   };
 }

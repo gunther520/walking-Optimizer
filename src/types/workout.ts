@@ -73,6 +73,14 @@ export type RouteHazard = {
   source?: "graphhopper" | "osm";
 };
 
+export type RouteTurn = {
+  alongMeters: number;
+  text: string;
+  streetName: string;
+  sign: number;
+  distanceMeters: number;
+};
+
 export type RoutePlan = {
   points: LatLng[];
   segments: RouteSegment[];
@@ -80,6 +88,8 @@ export type RoutePlan = {
   paceBlocks: PaceBlockSummary[];
   zoneBand: ZoneBand;
   hazards: RouteHazard[];
+  /** GraphHopper turns with along-path meters. Missing on older saved plans. */
+  turns?: RouteTurn[];
   hazardDebug?: {
     graphHopperCount: number;
     osmRawCount: number;

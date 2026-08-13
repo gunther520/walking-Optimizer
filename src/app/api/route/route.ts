@@ -245,6 +245,7 @@ export async function POST(request: Request) {
       route.instructions,
       profile,
       hazards,
+      route.turns ?? [],
     );
 
     const degradedNote = includeOsmHazards

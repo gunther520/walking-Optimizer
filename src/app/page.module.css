@@ -493,6 +493,13 @@
   font-size: 18px;
 }
 
+.walkHudToggles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .cueToggle {
   display: flex;
   align-items: center;
@@ -573,6 +580,14 @@
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
+}
+
+.walkNextTurn {
+  margin: 8px 0 0;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .walkHudCountdown {
