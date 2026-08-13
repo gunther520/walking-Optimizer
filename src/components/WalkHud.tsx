@@ -24,6 +24,16 @@ import {
   type AlongPathProgress,
 } from "@/lib/walk-along";
 import { isOnRoute, offPathMessage } from "@/lib/walk-follow";
+import {
+  buildSplitMarkers,
+  completedSplitStats,
+  currentSplitSummary,
+  estimatedKcalWalked,
+  isWalkFinished,
+  splitAnnounceText,
+  updateSplitCrossings,
+  type SplitCrossing,
+} from "@/lib/walk-splits";
 
 import styles from "@/app/page.module.css";
 
@@ -36,6 +46,7 @@ type WalkHudProps = {
   onAlongProgress?: (progress: AlongPathProgress | null) => void;
   gpsEnabled?: boolean;
   distanceToRouteMeters?: number | null;
+  weightKg?: number;
 };
 
 const DEMO_SPEED = 10;
@@ -66,6 +77,7 @@ export function WalkHud({
   onAlongProgress,
   gpsEnabled = false,
   distanceToRouteMeters = null,
+  weightKg = 68,
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
@@ -73,6 +85,8 @@ export function WalkHud({
   const [demoFast, setDemoFast] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [lastCueNote, setLastCueNote] = useState<string | null>(null);
+  const [finished, setFinished] = useState(false);
+  const [crossings, setCrossings] = useState<SplitCrossing[]>([]);
   const pausedElapsedRef = useRef(0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
@@ -88,6 +102,8 @@ export function WalkHud({
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
     lastOffPathRef.current = null;
+    setFinished(false);
+    setCrossings([]);
     setLastCueNote(null);
     stopWalkSpeech();
   }, [routeId]);
@@ -146,6 +162,30 @@ export function WalkHud({
     offPath && distanceToRouteMeters != null
       ? offPathMessage(distanceToRouteMeters)
       : null;
+  const splitMarkers = useMemo(
+    () => buildSplitMarkers(routePlan),
+    [routePlan],
+  );
+  const splitNow = currentSplitSummary(
+    routePlan,
+    splitMarkers,
+    along.alongMeters,
+    elapsedSeconds,
+    crossings,
+  );
+  const completedSplits = completedSplitStats(
+    routePlan,
+    splitMarkers,
+    crossings,
+  );
+  const kcal = Math.round(
+    estimatedKcalWalked(
+      routePlan,
+      along.alongMeters,
+      elapsedSeconds,
+      weightKg,
+    ),
+  );
 
   useEffect(() => {
     onAlongProgress?.(along);
@@ -203,6 +243,47 @@ export function WalkHud({
   }, [walking, voiceOn, gpsEnabled, distanceToRouteMeters]);
 
   useEffect(() => {
+    if (!walking && elapsedSeconds === 0) return;
+    const next = updateSplitCrossings(
+      splitMarkers,
+      along.alongMeters,
+      elapsedSeconds,
+      crossings,
+    );
+    if (!next.newlyCrossed.length) return;
+    setCrossings(next.crossings);
+    if (!walking) return;
+    const latest = next.newlyCrossed[next.newlyCrossed.length - 1];
+    const phrase = splitAnnounceText(latest.alongMeters);
+    if (voiceOn) speakWalkCue(phrase);
+    setLastCueNote(phrase);
+  }, [
+    splitMarkers,
+    along.alongMeters,
+    elapsedSeconds,
+    crossings,
+    walking,
+    voiceOn,
+  ]);
+
+  useEffect(() => {
+    if (!walking || finished) return;
+    if (
+      !isWalkFinished(
+        along.totalMeters,
+        along.remainingMeters,
+        along.alongMeters,
+      )
+    ) {
+      return;
+    }
+    setFinished(true);
+    setWalking(false);
+    if (voiceOn) speakWalkCue("Walk complete");
+    setLastCueNote("Walk complete");
+  }, [walking, finished, along, voiceOn]);
+
+  useEffect(() => {
     if (!walking || typeof navigator === "undefined" || !("wakeLock" in navigator)) {
       return;
     }
@@ -237,6 +318,9 @@ export function WalkHud({
     if (elapsedSeconds === 0) {
       lastRoleRef.current = null;
       lastSpokenTurnRef.current = null;
+      lastOffPathRef.current = null;
+      setFinished(false);
+      setCrossings([]);
     }
     setWalking(true);
     if (progress.block && lastRoleRef.current == null) {
@@ -270,6 +354,8 @@ export function WalkHud({
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
     lastOffPathRef.current = null;
+    setFinished(false);
+    setCrossings([]);
     setLastCueNote(null);
     stopWalkSpeech();
   }
@@ -344,7 +430,7 @@ export function WalkHud({
 
       <div className={`${styles.walkHudMain} ${roleClass}`}>
         <span className={styles.walkHudEyebrow}>
-          {walking ? "Current interval" : "Ready"}
+          {finished ? "Finished" : walking ? "Current interval" : "Ready"}
         </span>
         <strong className={styles.walkHudRole}>
           {role ? paceRoleLabel(role) : "—"}
@@ -370,17 +456,49 @@ export function WalkHud({
           {" · "}
           {formatDistance(along.remainingMeters)} remaining
         </p>
-        {nextTurn ? (
+        {splitMarkers.length && !finished ? (
+          <p className={styles.walkSplitLine}>
+            Km {splitNow.index}
+            {" · "}
+            {formatDuration(Math.round(splitNow.actualSeconds))} this split
+            {" / plan "}
+            {formatDuration(Math.round(splitNow.plannedSeconds))}
+          </p>
+        ) : null}
+        {nextTurn && !finished ? (
           <p className={styles.walkNextTurn}>
             Next turn in {formatDistance(metersToTurn ?? 0)}: {nextTurn.text}
           </p>
         ) : walking ? (
           <p className={styles.walkNextTurn}>No further turns — continue to the finish.</p>
         ) : null}
-        <div className={styles.walkHudCountdown}>
-          {formatDuration(Math.round(progress.remainingSeconds))}
-          <span>left until next role change / cue</span>
-        </div>
+        {finished ? (
+          <div className={styles.walkFinish}>
+            <strong>Walk complete</strong>
+            <p>
+              {formatDuration(elapsedSeconds)} elapsed · plan{" "}
+              {formatDuration(Math.round(routePlan.estimatedDurationSeconds))}
+            </p>
+            <p>
+              {formatDistance(along.alongMeters)} · ~{kcal} kcal
+            </p>
+            {completedSplits.length ? (
+              <p className={styles.walkSplitList}>
+                {completedSplits
+                  .map(
+                    (split) =>
+                      `${split.label} km ${formatDuration(Math.round(split.actualSeconds))} (plan ${formatDuration(Math.round(split.plannedSeconds))})`,
+                  )
+                  .join(" · ")}
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className={styles.walkHudCountdown}>
+            {formatDuration(Math.round(progress.remainingSeconds))}
+            <span>left until next role change / cue</span>
+          </div>
+        )}
       </div>
 
       <div className={styles.walkHudMeta}>
@@ -414,7 +532,7 @@ export function WalkHud({
       <div className={styles.walkHudActions}>
         {!walking ? (
           <button className={styles.primaryButton} type="button" onClick={handleStart}>
-            {elapsedSeconds > 0 ? "Resume walk" : "Start walk"}
+            {elapsedSeconds > 0 || finished ? "Resume walk" : "Start walk"}
           </button>
         ) : (
           <button className={styles.secondaryButton} type="button" onClick={handlePause}>

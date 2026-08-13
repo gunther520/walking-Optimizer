@@ -54,7 +54,8 @@ a {
   border: none !important;
 }
 
-.you-icon {
+.you-icon,
+.km-icon {
   background: transparent !important;
   border: none !important;
 }

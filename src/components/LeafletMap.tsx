@@ -26,6 +26,7 @@ import {
   shouldPanToFollow,
 } from "@/lib/walk-follow";
 import type { PathHandle, ViaWaypoint } from "@/lib/via-points";
+import { formatSplitLabel, type SplitMarker } from "@/lib/walk-splits";
 
 type LeafletMapProps = {
   start: LatLng | null;
@@ -59,6 +60,7 @@ type LeafletMapProps = {
   onFollowInterrupted?: () => void;
   /** Compass heading in degrees, 0 = north. */
   gpsHeadingDeg?: number | null;
+  splitMarkers?: SplitMarker[];
 };
 
 function ClickHandler({
@@ -199,6 +201,31 @@ function createYouIcon(headingDeg: number | null) {
       </div>
     `,
     iconSize: [28, 28],
+    iconAnchor: [0, 0],
+  });
+}
+
+function createKmIcon(label: string) {
+  return L.divIcon({
+    className: "km-icon",
+    html: `
+      <div style="
+        min-width: 22px;
+        height: 22px;
+        padding: 0 5px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: #10213a;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+        transform: translate(-50%, -50%);
+      ">${label}</div>
+    `,
+    iconSize: [22, 22],
     iconAnchor: [0, 0],
   });
 }
@@ -409,6 +436,7 @@ export function LeafletMap({
   followNonce = 0,
   onFollowInterrupted,
   gpsHeadingDeg = null,
+  splitMarkers = [],
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -610,6 +638,20 @@ export function LeafletMap({
         />
       ))}
 
+      {splitMarkers.map((marker) => (
+        <Marker
+          key={`km-${marker.alongMeters}`}
+          position={[marker.location.lat, marker.location.lng]}
+          icon={createKmIcon(formatSplitLabel(marker.alongMeters))}
+          zIndexOffset={200}
+        >
+          <Tooltip direction="top" offset={[0, -12]}>
+            {marker.alongMeters >= 1000
+              ? `${formatSplitLabel(marker.alongMeters)} km`
+              : `${Math.round(marker.alongMeters)} m`}
+          </Tooltip>
+        </Marker>
+      ))}
       {start ? (
         <CircleMarker center={[start.lat, start.lng]} radius={9} pathOptions={{ color: "#16a34a" }}>
           <Tooltip direction="top" offset={[0, -10]} permanent>

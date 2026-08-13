@@ -41,6 +41,30 @@ export function alongMetersAtElapsed(plan: RoutePlan, elapsedSeconds: number) {
   return totalMeters;
 }
 
+/** Planned seconds to reach alongMeters, using the interval speed plan. */
+export function plannedSecondsAlong(plan: RoutePlan, alongMeters: number) {
+  const target = Math.max(0, alongMeters);
+  let walked = 0;
+  let seconds = 0;
+
+  for (let i = 0; i < plan.segments.length; i += 1) {
+    const segment = plan.segments[i];
+    const speed = Math.max(
+      0.2,
+      plan.speedPlan[i]?.targetSpeedMps ?? 1.4,
+    );
+    const nextWalked = walked + segment.distanceMeters;
+    if (nextWalked >= target) {
+      seconds += (target - walked) / speed;
+      return seconds;
+    }
+    seconds += segment.distanceMeters / speed;
+    walked = nextWalked;
+  }
+
+  return seconds;
+}
+
 /** Distance along the polyline for a GPS fix snapped onto the nearest segment. */
 export function alongMetersAtPosition(plan: RoutePlan, position: LatLng) {
   const { offsets, totalMeters } = buildCumulativeDistances(plan.segments);

@@ -26,6 +26,7 @@ import {
 import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { walkedPathPoints, type AlongPathProgress } from "@/lib/walk-along";
 import { isOnRoute, ON_ROUTE_MAX_METERS } from "@/lib/walk-follow";
+import { buildSplitMarkers } from "@/lib/walk-splits";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import {
@@ -288,6 +289,11 @@ function WorkoutPlannerClient() {
     }
     return walkedPathPoints(routePlan, alongProgress.alongMeters);
   }, [routePlan, alongProgress]);
+
+  const splitMarkers = useMemo(
+    () => (routePlan ? buildSplitMarkers(routePlan) : []),
+    [routePlan],
+  );
 
   function commitViaPoints(next: ViaWaypoint[]) {
     const ordered = sortViasBySequence(next);
@@ -1338,6 +1344,7 @@ function WorkoutPlannerClient() {
               <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>
               <li>Optionally enable GPS for live pace guidance on the path. Recenter follows you; drag the map to look around.</li>
+              <li>Kilometer ticks mark the path. Walk mode records split times and a finish summary.</li>
             </ol>
           </div>
 
@@ -1415,6 +1422,7 @@ function WorkoutPlannerClient() {
               onAlongProgress={handleAlongProgress}
               gpsEnabled={gpsConsent && currentPosition != null}
               distanceToRouteMeters={liveStats?.distanceToRouteMeters ?? null}
+              weightKg={form.weightKg}
             />
           ) : null}
 
@@ -1456,6 +1464,7 @@ function WorkoutPlannerClient() {
               followNonce={followNonce}
               onFollowInterrupted={() => setFollowWalker(false)}
               gpsHeadingDeg={gpsHeadingDeg}
+              splitMarkers={splitMarkers}
             />
             {routePlan ? (
               <div className={styles.mapPathOverlay}>
