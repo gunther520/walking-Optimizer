@@ -23,6 +23,7 @@ import {
   getAlongPathProgress,
   type AlongPathProgress,
 } from "@/lib/walk-along";
+import { isOnRoute, offPathMessage } from "@/lib/walk-follow";
 
 import styles from "@/app/page.module.css";
 
@@ -33,6 +34,8 @@ type WalkHudProps = {
   onRoute: boolean;
   currentPosition?: { lat: number; lng: number } | null;
   onAlongProgress?: (progress: AlongPathProgress | null) => void;
+  gpsEnabled?: boolean;
+  distanceToRouteMeters?: number | null;
 };
 
 const DEMO_SPEED = 10;
@@ -61,6 +64,8 @@ export function WalkHud({
   onRoute,
   currentPosition = null,
   onAlongProgress,
+  gpsEnabled = false,
+  distanceToRouteMeters = null,
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
@@ -72,6 +77,7 @@ export function WalkHud({
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
   const lastSpokenTurnRef = useRef<number | null>(null);
+  const lastOffPathRef = useRef<boolean | null>(null);
   const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
 
   useEffect(() => {
@@ -81,6 +87,7 @@ export function WalkHud({
     setElapsedSeconds(0);
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
+    lastOffPathRef.current = null;
     setLastCueNote(null);
     stopWalkSpeech();
   }, [routeId]);
@@ -131,6 +138,14 @@ export function WalkHud({
   const metersToTurn = nextTurn
     ? Math.max(0, nextTurn.alongMeters - along.alongMeters)
     : null;
+  const offPath =
+    gpsEnabled &&
+    distanceToRouteMeters != null &&
+    !isOnRoute(distanceToRouteMeters);
+  const offPathText =
+    offPath && distanceToRouteMeters != null
+      ? offPathMessage(distanceToRouteMeters)
+      : null;
 
   useEffect(() => {
     onAlongProgress?.(along);
@@ -167,6 +182,25 @@ export function WalkHud({
     speakWalkCue(phrase);
     setLastCueNote(phrase);
   }, [walking, voiceOn, nextTurn, along.alongMeters]);
+
+  useEffect(() => {
+    if (!walking || !gpsEnabled || distanceToRouteMeters == null) return;
+    const off = !isOnRoute(distanceToRouteMeters);
+    if (lastOffPathRef.current === off) return;
+    if (lastOffPathRef.current == null) {
+      lastOffPathRef.current = off;
+      return;
+    }
+    lastOffPathRef.current = off;
+    const phrase = off
+      ? offPathMessage(distanceToRouteMeters) ??
+        "You are off the path"
+      : "Back on the route";
+    if (voiceOn) {
+      speakWalkCue(phrase);
+    }
+    setLastCueNote(phrase);
+  }, [walking, voiceOn, gpsEnabled, distanceToRouteMeters]);
 
   useEffect(() => {
     if (!walking || typeof navigator === "undefined" || !("wakeLock" in navigator)) {
@@ -235,6 +269,7 @@ export function WalkHud({
     setElapsedSeconds(0);
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = null;
+    lastOffPathRef.current = null;
     setLastCueNote(null);
     stopWalkSpeech();
   }
@@ -292,15 +327,20 @@ export function WalkHud({
       </div>
 
       <p className={styles.walkHudStatus}>
-        {progress.mode === "gps" && onRoute
-          ? "Tracking GPS on the route — intervals follow your position."
-          : demoFast
-            ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
-            : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
+        {offPath && distanceToRouteMeters != null
+          ? `GPS is ${formatDistance(distanceToRouteMeters)} off the path — intervals use the clock until you rejoin.`
+          : progress.mode === "gps" && onRoute
+            ? "Tracking GPS on the route — intervals follow your position."
+            : demoFast
+              ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
+              : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
         {walking
           ? " Screen stays on while you walk, if this browser allows it."
           : ""}
       </p>
+      {offPathText ? (
+        <p className={styles.walkOffPath}>{offPathText}</p>
+      ) : null}
 
       <div className={`${styles.walkHudMain} ${roleClass}`}>
         <span className={styles.walkHudEyebrow}>

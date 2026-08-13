@@ -25,6 +25,7 @@ import {
 } from "@/lib/time-budget";
 import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { walkedPathPoints, type AlongPathProgress } from "@/lib/walk-along";
+import { isOnRoute, ON_ROUTE_MAX_METERS } from "@/lib/walk-follow";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
 import {
@@ -247,6 +248,9 @@ function WorkoutPlannerClient() {
   );
   const [savedWalks, setSavedWalks] = useState<SavedWalk[]>(() => listSavedWalks());
   const [saveName, setSaveName] = useState("");
+  const [followWalker, setFollowWalker] = useState(true);
+  const [followNonce, setFollowNonce] = useState(0);
+  const [gpsHeadingDeg, setGpsHeadingDeg] = useState<number | null>(null);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
@@ -343,6 +347,10 @@ function WorkoutPlannerClient() {
   ]);
 
   useEffect(() => {
+    if (fitNonce > 0) setFollowWalker(false);
+  }, [fitNonce]);
+
+  useEffect(() => {
     if (!gpsConsent || !routePlan || !("geolocation" in navigator)) {
       return;
     }
@@ -367,6 +375,22 @@ function WorkoutPlannerClient() {
         }
 
         lastFixRef.current = { point: nextPoint, timestamp: now };
+
+        const rawHeading = position.coords.heading;
+        let nextHeading =
+          rawHeading != null && Number.isFinite(rawHeading) && rawHeading >= 0
+            ? rawHeading
+            : null;
+        if (
+          nextHeading == null &&
+          previous &&
+          haversineDistance(previous.point, nextPoint) >= 4
+        ) {
+          nextHeading = headingDegrees(previous.point, nextPoint);
+        }
+        if (nextHeading != null) {
+          setGpsHeadingDeg(nextHeading);
+        }
 
         if (!routePlan.segments.length) {
           return;
@@ -500,6 +524,8 @@ function WorkoutPlannerClient() {
     setHeadingPoint(null);
     setCurrentPosition(null);
     lastFixRef.current = null;
+    setGpsHeadingDeg(null);
+    setFollowWalker(false);
     clearPlannerState();
     setSaveName("");
     setSaveNote("Cleared local session.");
@@ -904,15 +930,30 @@ function WorkoutPlannerClient() {
 
   function handleEnableGps() {
     setGpsConsent(true);
+    setFollowWalker(true);
+    setFollowNonce((nonce) => nonce + 1);
     setError(null);
-    setSaveNote("GPS enabled for this browser. Location stays on your device.");
+    setSaveNote(
+      "GPS enabled. Recenter follows you on the map; drag the map to look around.",
+    );
   }
 
   function handleDisableGps() {
     setGpsConsent(false);
     setCurrentPosition(null);
     setLiveStats(null);
+    setGpsHeadingDeg(null);
+    setFollowWalker(false);
     lastFixRef.current = null;
+  }
+
+  function handleRecenter() {
+    if (!currentPosition) {
+      setSaveNote("Enable GPS to recenter the map on you.");
+      return;
+    }
+    setFollowWalker(true);
+    setFollowNonce((nonce) => nonce + 1);
   }
 
   return (
@@ -1276,7 +1317,9 @@ function WorkoutPlannerClient() {
             )}
             <p className={styles.pickHint}>
               {gpsConsent
-                ? "GPS on — walk mode can follow your position when you are near the route."
+                ? currentPosition
+                  ? `GPS on — the map follows you (Recenter if you pan away). On-path within ${ON_ROUTE_MAX_METERS} m drives intervals; farther uses the clock.`
+                  : "GPS on — waiting for a fix. Recenter will follow you once a position arrives."
                 : "GPS off — walk mode still works on the interval clock (best for PC)."}
             </p>
           </div>
@@ -1294,7 +1337,7 @@ function WorkoutPlannerClient() {
               <li>Click the colored path (or drag a blue square) to dodge a blocked street.</li>
               <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>
-              <li>Optionally enable GPS for live pace guidance on the path.</li>
+              <li>Optionally enable GPS for live pace guidance on the path. Recenter follows you; drag the map to look around.</li>
             </ol>
           </div>
 
@@ -1367,11 +1410,11 @@ function WorkoutPlannerClient() {
             <WalkHud
               routePlan={routePlan}
               liveSegmentIndex={liveStats?.segmentIndex ?? null}
-              onRoute={
-                liveStats != null && liveStats.distanceToRouteMeters <= 40
-              }
+              onRoute={isOnRoute(liveStats?.distanceToRouteMeters)}
               currentPosition={currentPosition}
               onAlongProgress={handleAlongProgress}
+              gpsEnabled={gpsConsent && currentPosition != null}
+              distanceToRouteMeters={liveStats?.distanceToRouteMeters ?? null}
             />
           ) : null}
 
@@ -1406,6 +1449,13 @@ function WorkoutPlannerClient() {
                   ? alongProgress.location
                   : null
               }
+              followTarget={currentPosition}
+              followEnabled={
+                followWalker && !pickingEnabled && currentPosition != null
+              }
+              followNonce={followNonce}
+              onFollowInterrupted={() => setFollowWalker(false)}
+              gpsHeadingDeg={gpsHeadingDeg}
             />
             {routePlan ? (
               <div className={styles.mapPathOverlay}>
@@ -1417,8 +1467,21 @@ function WorkoutPlannerClient() {
                   Ctrl/⌘+Z undoes. Extra vias are chained for GraphHopper free tier.
                   {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
                   {loading ? " · Updating…" : ""}
+                  {gpsConsent && liveStats && !isOnRoute(liveStats.distanceToRouteMeters)
+                    ? ` · ${formatDistance(liveStats.distanceToRouteMeters)} off the path`
+                    : followWalker && currentPosition
+                      ? " · Following you"
+                      : ""}
                 </span>
                 <div className={styles.mapOverlayActions}>
+                  <button
+                    type="button"
+                    className={styles.mapOverlayButton}
+                    onClick={handleRecenter}
+                    disabled={!currentPosition}
+                  >
+                    {followWalker && currentPosition ? "Following" : "Recenter"}
+                  </button>
                   <button
                     type="button"
                     className={styles.mapOverlayButton}

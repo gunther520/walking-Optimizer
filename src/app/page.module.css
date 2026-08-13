@@ -584,6 +584,18 @@
   color: var(--muted);
 }
 
+.walkOffPath {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .walkHudCueNote {
   margin: 0;
   padding: 10px 12px;

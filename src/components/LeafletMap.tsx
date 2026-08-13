@@ -21,6 +21,10 @@ import {
   paceRoleLabel,
   paceStrokeColor,
 } from "@/lib/pace-style";
+import {
+  FOLLOW_MIN_ZOOM,
+  shouldPanToFollow,
+} from "@/lib/walk-follow";
 import type { PathHandle, ViaWaypoint } from "@/lib/via-points";
 
 type LeafletMapProps = {
@@ -47,6 +51,14 @@ type LeafletMapProps = {
   onPathClicked?: (point: LatLng) => void;
   headingPoint?: LatLng | null;
   endLabel?: string;
+  /** Pan the map to this GPS fix while follow is on. */
+  followTarget?: LatLng | null;
+  followEnabled?: boolean;
+  /** Bump after Recenter so follow re-zooms even if the target did not move. */
+  followNonce?: number;
+  onFollowInterrupted?: () => void;
+  /** Compass heading in degrees, 0 = north. */
+  gpsHeadingDeg?: number | null;
 };
 
 function ClickHandler({
@@ -92,6 +104,103 @@ function FitRouteBounds({
   }, [fitNonce, map, routePoints]);
 
   return null;
+}
+
+function FollowWalker({
+  target,
+  enabled,
+  followNonce = 0,
+  onFollowInterrupted,
+}: {
+  target: LatLng | null;
+  enabled: boolean;
+  followNonce?: number;
+  onFollowInterrupted?: () => void;
+}) {
+  const map = useMap();
+  const lastPanRef = useRef<LatLng | null>(null);
+  const wasEnabledRef = useRef(false);
+
+  useMapEvents({
+    dragstart() {
+      if (enabled) onFollowInterrupted?.();
+    },
+  });
+
+  useEffect(() => {
+    wasEnabledRef.current = false;
+    lastPanRef.current = null;
+  }, [followNonce]);
+
+  useEffect(() => {
+    if (!enabled || !target) {
+      wasEnabledRef.current = false;
+      lastPanRef.current = null;
+      return;
+    }
+
+    const starting = !wasEnabledRef.current;
+    wasEnabledRef.current = true;
+
+    if (starting) {
+      const zoom = Math.max(map.getZoom(), FOLLOW_MIN_ZOOM);
+      map.setView([target.lat, target.lng], zoom, { animate: true });
+      lastPanRef.current = target;
+      return;
+    }
+
+    if (!shouldPanToFollow(lastPanRef.current, target)) return;
+    lastPanRef.current = target;
+    map.panTo([target.lat, target.lng], { animate: true, duration: 0.35 });
+  }, [enabled, target, map, followNonce]);
+
+  return null;
+}
+
+function createYouIcon(headingDeg: number | null) {
+  const rotation =
+    headingDeg != null && Number.isFinite(headingDeg)
+      ? `rotate(${Math.round(headingDeg)}deg)`
+      : "none";
+  const arrow =
+    headingDeg != null && Number.isFinite(headingDeg)
+      ? `<div style="
+            position: absolute;
+            top: -2px;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 10px solid #d97706;
+            transform: translate(-50%, -100%);
+          "></div>`
+      : "";
+
+  return L.divIcon({
+    className: "you-icon",
+    html: `
+      <div style="
+        position: relative;
+        width: 28px;
+        height: 28px;
+        transform: translate(-50%, -50%) ${rotation};
+      ">
+        ${arrow}
+        <div style="
+          width: 16px;
+          height: 16px;
+          margin: 6px auto 0;
+          border-radius: 50%;
+          background: #f59e0b;
+          border: 2px solid #fff;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+        "></div>
+      </div>
+    `,
+    iconSize: [28, 28],
+    iconAnchor: [0, 0],
+  });
 }
 
 function createHazardIcon(kind: OSMHazardKind) {
@@ -295,6 +404,11 @@ export function LeafletMap({
   onPathClicked,
   headingPoint = null,
   endLabel = "End",
+  followTarget = null,
+  followEnabled = false,
+  followNonce = 0,
+  onFollowInterrupted,
+  gpsHeadingDeg = null,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -305,6 +419,14 @@ export function LeafletMap({
       trafficSignal: createHazardIcon("trafficSignal"),
     }),
     [],
+  );
+  const headingBucket =
+    gpsHeadingDeg != null && Number.isFinite(gpsHeadingDeg)
+      ? Math.round(gpsHeadingDeg / 5) * 5
+      : null;
+  const youIcon = useMemo(
+    () => createYouIcon(headingBucket),
+    [headingBucket],
   );
 
   useEffect(() => {
@@ -371,6 +493,12 @@ export function LeafletMap({
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <FitRouteBounds routePoints={routePoints} fitNonce={fitNonce} />
+      <FollowWalker
+        target={followTarget}
+        enabled={followEnabled}
+        followNonce={followNonce}
+        onFollowInterrupted={onFollowInterrupted}
+      />
       <ClickHandler onPickPoint={onPickPoint} enabled={pickingEnabled} />
 
       {segmentSpeedPlan && segmentSpeedPlan.length && routePoints.length > 2
@@ -508,15 +636,15 @@ export function LeafletMap({
         </CircleMarker>
       ) : null}
       {currentPosition ? (
-        <CircleMarker
-          center={[currentPosition.lat, currentPosition.lng]}
-          radius={8}
-          pathOptions={{ color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 0.9 }}
+        <Marker
+          position={[currentPosition.lat, currentPosition.lng]}
+          icon={youIcon}
+          zIndexOffset={600}
         >
-          <Tooltip direction="top" offset={[0, -10]}>
+          <Tooltip direction="top" offset={[0, -12]}>
             You
           </Tooltip>
-        </CircleMarker>
+        </Marker>
       ) : null}
       {walkerOnPath ? (
         <CircleMarker
