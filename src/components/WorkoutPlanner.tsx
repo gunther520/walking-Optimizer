@@ -32,6 +32,15 @@ import {
   loadPlannerState,
   savePlannerState,
 } from "@/lib/planner-storage";
+import {
+  defaultSavedWalkName,
+  deleteSavedWalk,
+  getSavedWalk,
+  listSavedWalks,
+  MAX_SAVED_WALKS,
+  saveWalk,
+  type SavedWalk,
+} from "@/lib/saved-walks";
 import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 import {
   applySnappedViaLocations,
@@ -236,6 +245,8 @@ function WorkoutPlannerClient() {
   const [alongProgress, setAlongProgress] = useState<AlongPathProgress | null>(
     null,
   );
+  const [savedWalks, setSavedWalks] = useState<SavedWalk[]>(() => listSavedWalks());
+  const [saveName, setSaveName] = useState("");
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
@@ -253,6 +264,15 @@ function WorkoutPlannerClient() {
   endRef.current = end;
   headingRef.current = headingPoint;
   formRef.current = form;
+
+  useEffect(() => {
+    if (!routePlan) return;
+    setSaveName((current) =>
+      current.trim()
+        ? current
+        : defaultSavedWalkName(routePlan, form.walkShape),
+    );
+  }, [routePlan, form.walkShape]);
 
   const handleAlongProgress = useCallback((progress: AlongPathProgress | null) => {
     setAlongProgress(progress);
@@ -481,6 +501,7 @@ function WorkoutPlannerClient() {
     setCurrentPosition(null);
     lastFixRef.current = null;
     clearPlannerState();
+    setSaveName("");
     setSaveNote("Cleared local session.");
   }
 
@@ -809,6 +830,78 @@ function WorkoutPlannerClient() {
     }
   }
 
+  function handleSaveWalk() {
+    if (!routePlan || !start) {
+      setSaveNote("Build a walking plan before saving it.");
+      return;
+    }
+    const result = saveWalk({
+      name: saveName,
+      start,
+      end,
+      headingPoint,
+      viaPoints: sortViasBySequence(viaPoints),
+      routePlan,
+      walkShape: form.walkShape,
+      targetMinutes: form.targetMinutes,
+      loopSeed: form.loopSeed,
+      routePreference: form.routePreference,
+    });
+    if (!result) {
+      setError("Could not save this walk in the browser (storage may be full).");
+      return;
+    }
+    setSavedWalks(listSavedWalks());
+    setError(null);
+    const dropped =
+      result.dropped > 0
+        ? ` Oldest saved walk${result.dropped === 1 ? " was" : "s were"} removed (max ${MAX_SAVED_WALKS}).`
+        : "";
+    setSaveNote(
+      `Saved “${result.walk.name}” on this device. Load it later without using GraphHopper credits.${dropped}`,
+    );
+  }
+
+  function handleLoadSavedWalk(id: string) {
+    const walk = getSavedWalk(id);
+    if (!walk) {
+      setError("That saved walk is no longer in this browser.");
+      setSavedWalks(listSavedWalks());
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      walkShape: walk.walkShape,
+      targetMinutes: walk.targetMinutes,
+      loopSeed: walk.loopSeed,
+      routePreference: walk.routePreference,
+    }));
+    setStart(walk.start);
+    setEnd(walk.end);
+    setHeadingPoint(walk.headingPoint);
+    commitViaPoints(normalizeViaPoints(walk.viaPoints));
+    resetViaHistory();
+    setRoutePlan(walk.routePlan);
+    setPickingEnabled(false);
+    setFitNonce((nonce) => nonce + 1);
+    setAlongProgress(null);
+    setLiveStats(null);
+    setError(null);
+    setSaveName(walk.name);
+    setSaveNote(
+      `Loaded “${walk.name}”. No GraphHopper call — rebuild only if you want a new path or today’s HR profile.`,
+    );
+  }
+
+  function handleDeleteSavedWalk(id: string) {
+    const walk = savedWalks.find((item) => item.id === id);
+    deleteSavedWalk(id);
+    setSavedWalks(listSavedWalks());
+    setSaveNote(
+      walk ? `Removed “${walk.name}” from this browser.` : "Removed saved walk.",
+    );
+  }
+
   function handleEnableGps() {
     setGpsConsent(true);
     setError(null);
@@ -1087,6 +1180,77 @@ function WorkoutPlannerClient() {
           </div>
 
           <div className={styles.card}>
+            <h2>Saved walks</h2>
+            <p className={styles.cardText}>
+              Keep built plans on this device so you can walk them again without spending
+              GraphHopper credits. Share links still need Build; saved walks do not.
+            </p>
+            {routePlan ? (
+              <>
+                <label className={styles.field}>
+                  <span>Name</span>
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={saveName}
+                    onChange={(event) => setSaveName(event.target.value)}
+                  />
+                </label>
+                <button
+                  className={styles.primaryButton}
+                  type="button"
+                  onClick={handleSaveWalk}
+                  disabled={loading}
+                >
+                  Save this walk
+                </button>
+              </>
+            ) : (
+              <p className={styles.pickHint}>
+                Build a route first, then save it here.
+              </p>
+            )}
+            {savedWalks.length ? (
+              <div className={styles.savedWalkList}>
+                {savedWalks.map((walk) => (
+                  <div key={walk.id} className={styles.savedWalkRow}>
+                    <div>
+                      <strong>{walk.name}</strong>
+                      <span>
+                        {new Date(walk.savedAt).toLocaleString()} ·{" "}
+                        {formatDistance(walk.routePlan.totalDistanceMeters)} ·{" "}
+                        {formatDuration(walk.routePlan.estimatedDurationSeconds)}
+                        {walk.viaPoints.length
+                          ? ` · ${walk.viaPoints.length} via(s)`
+                          : ""}
+                      </span>
+                    </div>
+                    <div className={styles.savedWalkActions}>
+                      <button
+                        type="button"
+                        className={styles.savedWalkButton}
+                        onClick={() => handleLoadSavedWalk(walk.id)}
+                        disabled={loading}
+                      >
+                        Load
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.savedWalkButton}
+                        onClick={() => handleDeleteSavedWalk(walk.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.pickHint}>No saved walks on this device yet.</p>
+            )}
+          </div>
+
+          <div className={styles.card}>
             <h2>Live GPS</h2>
             <p className={styles.cardText}>
               Location is optional and only used in this browser to match you to the
@@ -1125,6 +1289,8 @@ function WorkoutPlannerClient() {
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
               <li>Build the route — the map stays interactive. Shuffle a loop to try another tour.</li>
               <li>Download GPX to walk it in another app or watch.</li>
+              <li>Save the walk on this device to reopen it later without GraphHopper credits.</li>
+              <li>Copy a share link for start/end/vias — the other person still needs to Build.</li>
               <li>Click the colored path (or drag a blue square) to dodge a blocked street.</li>
               <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>

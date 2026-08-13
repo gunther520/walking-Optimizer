@@ -168,6 +168,37 @@ export function WalkHud({
     setLastCueNote(phrase);
   }, [walking, voiceOn, nextTurn, along.alongMeters]);
 
+  useEffect(() => {
+    if (!walking || typeof navigator === "undefined" || !("wakeLock" in navigator)) {
+      return;
+    }
+
+    let sentinel: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    async function requestLock() {
+      try {
+        sentinel = await navigator.wakeLock.request("screen");
+      } catch {
+        sentinel = null;
+      }
+    }
+
+    void requestLock();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && !cancelled) {
+        void requestLock();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      void sentinel?.release();
+    };
+  }, [walking]);
+
   function handleStart() {
     if (elapsedSeconds === 0) {
       lastRoleRef.current = null;
@@ -266,6 +297,9 @@ export function WalkHud({
           : demoFast
             ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
             : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
+        {walking
+          ? " Screen stays on while you walk, if this browser allows it."
+          : ""}
       </p>
 
       <div className={`${styles.walkHudMain} ${roleClass}`}>

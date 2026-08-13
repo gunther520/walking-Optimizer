@@ -173,6 +173,68 @@
   line-height: 1.4;
 }
 
+.savedWalkList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  max-height: 340px;
+  overflow: auto;
+}
+
+.savedWalkRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.savedWalkRow strong {
+  display: block;
+  font-size: 14px;
+}
+
+.savedWalkRow span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.savedWalkActions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.savedWalkButton {
+  height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.savedWalkButton:hover {
+  background: #eef4ff;
+}
+
+.savedWalkButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .steps {
   padding-left: 18px;
   color: var(--muted);
