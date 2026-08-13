@@ -59,3 +59,7 @@ a {
   background: transparent !important;
   border: none !important;
 }
+
+.route-path-clickable {
+  cursor: pointer;
+}

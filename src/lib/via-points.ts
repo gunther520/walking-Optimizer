@@ -1,5 +1,5 @@
 import type { LatLng, RoutePlan, RouteSegment } from "@/types/workout";
-import { getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
+import { getNearestSegmentMatch, haversineDistance, offsetPerpendicularToSegment, projectPointOntoSegment } from "@/lib/route-math";
 
 export type ViaWaypoint = {
   id: string;
@@ -31,6 +31,11 @@ const VIA_CLEARANCE_METERS = 55;
 const MAX_HANDLES = 18;
 /** A via farther than this from the rebuilt path is treated as neglected. */
 export const VIA_ON_PATH_MAX_METERS = 95;
+/** Click must land this close to the walked polyline to count as blocking it. */
+export const PATH_CLICK_MAX_METERS = 32;
+/** How far off the street to drop the avoidance via. */
+export const BLOCK_OFFSET_METERS = 75;
+const VIA_HISTORY_LIMIT = 30;
 
 function createId() {
   return `via-${Math.random().toString(36).slice(2, 10)}`;
@@ -270,4 +275,115 @@ export function applySnappedViaLocations(
     ...via,
     location: snapped[index],
   }));
+}
+
+export function cloneViaPoints(vias: ViaWaypoint[]): ViaWaypoint[] {
+  return vias.map((via) => ({
+    ...via,
+    location: { ...via.location },
+  }));
+}
+
+export type ViaHistory = {
+  past: ViaWaypoint[][];
+  future: ViaWaypoint[][];
+};
+
+export function emptyViaHistory(): ViaHistory {
+  return { past: [], future: [] };
+}
+
+export function recordViaHistory(
+  history: ViaHistory,
+  current: ViaWaypoint[],
+): ViaHistory {
+  return {
+    past: [...history.past, cloneViaPoints(current)].slice(-VIA_HISTORY_LIMIT),
+    future: [],
+  };
+}
+
+export function undoViaHistory(
+  history: ViaHistory,
+  current: ViaWaypoint[],
+): { vias: ViaWaypoint[]; history: ViaHistory } | null {
+  if (!history.past.length) return null;
+  const past = [...history.past];
+  const previous = past.pop() ?? [];
+  return {
+    vias: previous,
+    history: {
+      past,
+      future: [cloneViaPoints(current), ...history.future].slice(
+        0,
+        VIA_HISTORY_LIMIT,
+      ),
+    },
+  };
+}
+
+export function redoViaHistory(
+  history: ViaHistory,
+  current: ViaWaypoint[],
+): { vias: ViaWaypoint[]; history: ViaHistory } | null {
+  if (!history.future.length) return null;
+  const [next, ...future] = history.future;
+  return {
+    vias: next,
+    history: {
+      past: [...history.past, cloneViaPoints(current)].slice(-VIA_HISTORY_LIMIT),
+      future,
+    },
+  };
+}
+
+/**
+ * Turn a click on the planned path into an off-path avoidance via, so GraphHopper
+ * must leave that street. Tries the left side first, then the right.
+ */
+export function viaFromBlockedPathClick(
+  vias: ViaWaypoint[],
+  plan: RoutePlan,
+  click: LatLng,
+): ViaWaypoint[] | null {
+  if (!plan.segments.length) return null;
+
+  const match = getNearestSegmentMatch(click, plan.segments);
+  if (match.distanceMeters > PATH_CLICK_MAX_METERS) return null;
+
+  const segment = plan.segments[match.segmentIndex];
+  const projected = projectPointOntoSegment(click, segment.start, segment.end);
+  const onPath: LatLng = {
+    lat: projected.lat,
+    lng: projected.lng,
+    ele: segment.start.ele,
+  };
+  const { offsets, totalMeters } = buildCumulativeDistances(plan.segments);
+  const alongMeters =
+    (offsets[segment.index] ?? 0) + segment.distanceMeters * projected.t;
+
+  if (alongMeters < END_MARGIN_METERS || alongMeters > totalMeters - END_MARGIN_METERS) {
+    return null;
+  }
+
+  const handle: PathHandle = {
+    id: `click-${segment.index}`,
+    location: onPath,
+    segmentIndex: segment.index,
+    alongMeters,
+  };
+
+  for (const side of [1, -1] as const) {
+    const droppedAt = offsetPerpendicularToSegment(
+      segment.start,
+      segment.end,
+      onPath,
+      BLOCK_OFFSET_METERS,
+      side,
+    );
+    if (isNearExistingVia(droppedAt, vias)) continue;
+    return upsertViaFromHandle(vias, handle, droppedAt, plan);
+  }
+
+  return null;
 }

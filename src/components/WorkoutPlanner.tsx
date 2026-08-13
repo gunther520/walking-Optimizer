@@ -18,12 +18,18 @@ import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistan
 import {
   applySnappedViaLocations,
   buildPathHandles,
+  emptyViaHistory,
   normalizeViaPoints,
+  recordViaHistory,
+  redoViaHistory,
   removeVia,
   sortViasBySequence,
+  undoViaHistory,
   updateViaLocation,
   upsertViaFromHandle,
+  viaFromBlockedPathClick,
   viasSignature,
+  type ViaHistory,
   type ViaWaypoint,
 } from "@/lib/via-points";
 import {
@@ -163,6 +169,7 @@ function WorkoutPlannerClient() {
   const [gpsConsent, setGpsConsent] = useState(initial.gpsConsent);
   const [saveNote, setSaveNote] = useState<string | null>(initial.saveNote);
   const [viaPoints, setViaPoints] = useState<ViaWaypoint[]>(initial.viaPoints);
+  const [viaHistory, setViaHistory] = useState<ViaHistory>(emptyViaHistory());
   const [pickingEnabled, setPickingEnabled] = useState(initial.pickingEnabled);
   const [fitNonce, setFitNonce] = useState(initial.routePlan ? 1 : 0);
   const [alongProgress, setAlongProgress] = useState<AlongPathProgress | null>(
@@ -171,12 +178,14 @@ function WorkoutPlannerClient() {
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
+  const viaHistoryRef = useRef<ViaHistory>(emptyViaHistory());
   const routeRequestIdRef = useRef(0);
   const startRef = useRef(start);
   const endRef = useRef(end);
   const formRef = useRef(form);
 
   viaPointsRef.current = viaPoints;
+  viaHistoryRef.current = viaHistory;
   startRef.current = start;
   endRef.current = end;
   formRef.current = form;
@@ -197,6 +206,18 @@ function WorkoutPlannerClient() {
     viaPointsRef.current = ordered;
     setViaPoints(ordered);
     return ordered;
+  }
+
+  function applyUserVias(next: ViaWaypoint[]) {
+    setViaHistory((history) => recordViaHistory(history, viaPointsRef.current));
+    commitViaPoints(next);
+    if (startRef.current && endRef.current) {
+      scheduleRebuild();
+    }
+  }
+
+  function resetViaHistory() {
+    setViaHistory(emptyViaHistory());
   }
 
   useEffect(() => {
@@ -329,6 +350,7 @@ function WorkoutPlannerClient() {
       setStart(point);
       setEnd(null);
       commitViaPoints([]);
+      resetViaHistory();
       setLiveStats(null);
       return;
     }
@@ -345,6 +367,7 @@ function WorkoutPlannerClient() {
     setError(null);
     setPickingEnabled(true);
     commitViaPoints([]);
+    resetViaHistory();
     setCurrentPosition(null);
     lastFixRef.current = null;
     clearPlannerState();
@@ -358,10 +381,8 @@ function WorkoutPlannerClient() {
   }
 
   function handleClearVias() {
-    commitViaPoints([]);
-    if (start && end) {
-      void rebuildRoute([], { includeOsmHazards: false });
-    }
+    if (!viaPointsRef.current.length) return;
+    applyUserVias([]);
   }
 
   const pathHandles = useMemo(
@@ -370,7 +391,7 @@ function WorkoutPlannerClient() {
   );
 
   const pickHint = !pickingEnabled && routePlan
-    ? "Drag blue squares on the path to dodge blockages. Orange circles are vias — double-click to remove. Use “Change start & end” to re-pick endpoints."
+    ? "Click the colored path to dodge that street, or drag a blue square. Orange circles are vias — double-click to remove. Undo with Ctrl/⌘+Z."
     : !start
       ? "Click the map to set a start point."
       : !end
@@ -478,15 +499,11 @@ function WorkoutPlannerClient() {
   }
 
   function handleViaMoved(viaId: string, location: LatLng) {
-    const next = updateViaLocation(viaPointsRef.current, viaId, location, routePlan);
-    commitViaPoints(next);
-    scheduleRebuild();
+    applyUserVias(updateViaLocation(viaPointsRef.current, viaId, location, routePlan));
   }
 
   function handleViaRemoved(viaId: string) {
-    const next = removeVia(viaPointsRef.current, viaId);
-    commitViaPoints(next);
-    scheduleRebuild();
+    applyUserVias(removeVia(viaPointsRef.current, viaId));
   }
 
   function handleHandleDropped(
@@ -499,15 +516,61 @@ function WorkoutPlannerClient() {
       );
       return;
     }
-    const next = upsertViaFromHandle(
-      viaPointsRef.current,
-      handle,
-      location,
-      routePlan,
+    applyUserVias(
+      upsertViaFromHandle(viaPointsRef.current, handle, location, routePlan),
     );
-    commitViaPoints(next);
+  }
+
+  function handlePathClicked(point: LatLng) {
+    if (!routePlan) return;
+    if (viaPointsRef.current.length >= MAX_AVOIDANCE_VIAS) {
+      setError(
+        `At most ${MAX_AVOIDANCE_VIAS} avoidance vias — remove one before adding another.`,
+      );
+      return;
+    }
+    const next = viaFromBlockedPathClick(viaPointsRef.current, routePlan, point);
+    if (!next) {
+      setSaveNote("Click closer to the walking path to dodge that street.");
+      return;
+    }
+    applyUserVias(next);
+    setSaveNote("Dropped an avoidance via off that street. Drag it if the detour is the wrong side.");
+  }
+
+  function handleUndoVias() {
+    const undone = undoViaHistory(viaHistoryRef.current, viaPointsRef.current);
+    if (!undone) return;
+    viaHistoryRef.current = undone.history;
+    setViaHistory(undone.history);
+    commitViaPoints(undone.vias);
     scheduleRebuild();
   }
+
+  function handleRedoVias() {
+    const redone = redoViaHistory(viaHistoryRef.current, viaPointsRef.current);
+    if (!redone) return;
+    viaHistoryRef.current = redone.history;
+    setViaHistory(redone.history);
+    commitViaPoints(redone.vias);
+    scheduleRebuild();
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const key = event.key.toLowerCase();
+      const modifier = event.metaKey || event.ctrlKey;
+      if (!modifier || key !== "z") return;
+      event.preventDefault();
+      if (event.shiftKey) handleRedoVias();
+      else handleUndoVias();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   async function handleBuildRoute() {
     await rebuildRoute(viaPointsRef.current, {
@@ -763,7 +826,8 @@ function WorkoutPlannerClient() {
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
               <li>Build the route — the map stays interactive.</li>
               <li>Download GPX to walk it in another app or watch.</li>
-              <li>Drag blue squares on the path to dodge blocked roads.</li>
+              <li>Click the colored path (or drag a blue square) to dodge a blocked street.</li>
+              <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>
               <li>Optionally enable GPS for live pace guidance on the path.</li>
             </ol>
@@ -865,6 +929,7 @@ function WorkoutPlannerClient() {
               onViaMoved={handleViaMoved}
               onViaRemoved={handleViaRemoved}
               onHandleDropped={handleHandleDropped}
+              onPathClicked={handlePathClicked}
               fitNonce={fitNonce}
               walkedPath={walkedPath}
               walkerOnPath={
@@ -876,25 +941,40 @@ function WorkoutPlannerClient() {
             {routePlan ? (
               <div className={styles.mapPathOverlay}>
                 <strong>
-                  Drag blue handles to avoid a blocked road ({pathHandles.length} along path)
+                  Click the path to dodge a blocked street ({pathHandles.length} handles)
                 </strong>
                 <span>
-                  Orange circles are vias. Double-click a via to remove it.
-                  Free GraphHopper allows 5 points/request — extra vias are
-                  chained automatically.
+                  Orange vias mark detours — drag or double-click to remove.
+                  Ctrl/⌘+Z undoes. Extra vias are chained for GraphHopper free tier.
                   {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
                   {loading ? " · Updating…" : ""}
                 </span>
-                {viaPoints.length ? (
+                <div className={styles.mapOverlayActions}>
+                  <button
+                    type="button"
+                    className={styles.mapOverlayButton}
+                    onClick={handleUndoVias}
+                    disabled={loading || viaHistory.past.length === 0}
+                  >
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.mapOverlayButton}
+                    onClick={handleRedoVias}
+                    disabled={loading || viaHistory.future.length === 0}
+                  >
+                    Redo
+                  </button>
                   <button
                     type="button"
                     className={styles.mapOverlayButton}
                     onClick={handleClearVias}
-                    disabled={loading}
+                    disabled={loading || viaPoints.length === 0}
                   >
                     Clear vias
                   </button>
-                ) : null}
+                </div>
               </div>
             ) : null}
           </div>

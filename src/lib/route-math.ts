@@ -181,6 +181,38 @@ export function formatDistance(distanceMeters: number) {
   return `${Math.round(distanceMeters)} m`;
 }
 
+export function offsetLatLng(
+  point: LatLng,
+  eastMeters: number,
+  northMeters: number,
+): LatLng {
+  const latRad = toRadians(point.lat);
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = 111320 * Math.max(Math.cos(latRad), 0.2);
+  return {
+    lat: point.lat + northMeters / metersPerDegLat,
+    lng: point.lng + eastMeters / metersPerDegLng,
+    ele: point.ele,
+  };
+}
+
+/** Offset a point to the left (side=+1) or right (side=-1) of start→end. */
+export function offsetPerpendicularToSegment(
+  start: LatLng,
+  end: LatLng,
+  at: LatLng,
+  meters: number,
+  side: 1 | -1 = 1,
+): LatLng {
+  const meanLat = toRadians((start.lat + end.lat) / 2);
+  const east = (end.lng - start.lng) * 111320 * Math.cos(meanLat);
+  const north = (end.lat - start.lat) * 111320;
+  const length = Math.hypot(east, north) || 1;
+  const ux = east / length;
+  const uy = north / length;
+  return offsetLatLng(at, side * -uy * meters, side * ux * meters);
+}
+
 export function formatDuration(totalSeconds: number) {
   const safeSeconds = Math.max(0, Math.round(totalSeconds));
   const hours = Math.floor(safeSeconds / 3600);

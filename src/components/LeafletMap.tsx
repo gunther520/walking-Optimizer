@@ -43,6 +43,8 @@ type LeafletMapProps = {
   /** Walked portion of the route (clock or on-path GPS). */
   walkedPath?: LatLng[];
   walkerOnPath?: LatLng | null;
+  /** Click the planned path to drop an avoidance via off that street. */
+  onPathClicked?: (point: LatLng) => void;
 };
 
 function ClickHandler({
@@ -288,6 +290,7 @@ export function LeafletMap({
   fitNonce,
   walkedPath = [],
   walkerOnPath = null,
+  onPathClicked,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -335,6 +338,19 @@ export function LeafletMap({
       role,
     };
   }
+
+  const pathClickHandlers =
+    !pickingEnabled && onPathClicked
+      ? {
+          click(event: L.LeafletMouseEvent) {
+            L.DomEvent.stopPropagation(event);
+            onPathClicked({
+              lat: event.latlng.lat,
+              lng: event.latlng.lng,
+            });
+          },
+        }
+      : undefined;
 
   return (
     <MapContainer
@@ -400,10 +416,14 @@ export function LeafletMap({
                   color: group.color,
                   weight: group.dashArray ? 6 : 7,
                   dashArray: group.dashArray,
+                  className: pathClickHandlers ? "route-path-clickable" : undefined,
                 }}
+                eventHandlers={pathClickHandlers}
               >
                 <Tooltip direction="top" offset={[0, -10]} opacity={1} permanent={false}>
-                  {group.label}
+                  {pathClickHandlers
+                    ? `${group.label} · click to dodge this street`
+                    : group.label}
                 </Tooltip>
               </Polyline>
             ));
@@ -413,7 +433,12 @@ export function LeafletMap({
               positions={routePoints.map(
                 (point) => [point.lat, point.lng] as [number, number],
               )}
-              pathOptions={{ color: "#2f6fed", weight: 5 }}
+              pathOptions={{
+                color: "#2f6fed",
+                weight: 5,
+                className: pathClickHandlers ? "route-path-clickable" : undefined,
+              }}
+              eventHandlers={pathClickHandlers}
             />
           ) : null}
 
@@ -423,6 +448,7 @@ export function LeafletMap({
             (point) => [point.lat, point.lng] as [number, number],
           )}
           pathOptions={{ color: "#1e3a8a", weight: 9, opacity: 0.45 }}
+          interactive={false}
         />
       ) : null}
 

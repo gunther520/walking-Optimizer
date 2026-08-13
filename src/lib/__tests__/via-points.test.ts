@@ -3,15 +3,21 @@ import { describe, expect, it } from "vitest";
 import { buildSegments, haversineDistance } from "@/lib/route-math";
 import {
   applySnappedViaLocations,
+  BLOCK_OFFSET_METERS,
   buildCumulativeDistances,
   buildPathHandles,
+  emptyViaHistory,
   findNeglectedViaIndices,
   normalizeViaPoints,
   pointAtDistanceAlongRoute,
+  recordViaHistory,
+  redoViaHistory,
+  removeVia,
   sortViasBySequence,
+  undoViaHistory,
   upsertViaFromHandle,
   updateViaLocation,
-  removeVia,
+  viaFromBlockedPathClick,
   viasSignature,
 } from "@/lib/via-points";
 import type { LatLng, RoutePlan } from "@/types/workout";
@@ -207,5 +213,38 @@ describe("via points", () => {
     );
     expect(moved[0].location.lng).toBe(114.172);
     expect(removeVia(moved, "a")).toHaveLength(0);
+  });
+
+  it("turns a path click into an off-street via and ignores far clicks", () => {
+    const plan = makeLinePlan(1200);
+    const onPath = plan.points[Math.floor(plan.points.length / 2)];
+    const added = viaFromBlockedPathClick([], plan, onPath);
+    expect(added).not.toBeNull();
+    expect(added).toHaveLength(1);
+    const offset = haversineDistance(onPath, added![0].location);
+    expect(offset).toBeGreaterThan(BLOCK_OFFSET_METERS * 0.7);
+    expect(offset).toBeLessThan(BLOCK_OFFSET_METERS * 1.3);
+
+    const far = viaFromBlockedPathClick([], plan, {
+      lat: onPath.lat,
+      lng: onPath.lng + 0.02,
+    });
+    expect(far).toBeNull();
+  });
+
+  it("undoes and redoes via list snapshots", () => {
+    const first = [{ id: "a", location: { lat: 1, lng: 1 }, sequence: 1 }];
+    const second = [
+      ...first,
+      { id: "b", location: { lat: 2, lng: 2 }, sequence: 2 },
+    ];
+    let history = emptyViaHistory();
+    history = recordViaHistory(history, first);
+    const undone = undoViaHistory(history, second);
+    expect(undone).not.toBeNull();
+    expect(undone!.vias).toEqual(first);
+    const redone = redoViaHistory(undone!.history, undone!.vias);
+    expect(redone!.vias).toHaveLength(2);
+    expect(redone!.vias[1].id).toBe("b");
   });
 });
