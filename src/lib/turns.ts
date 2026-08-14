@@ -1,6 +1,7 @@
 import { buildSegments } from "@/lib/route-math";
-import { buildCumulativeDistances } from "@/lib/via-points";
-import type { LatLng, PaceRole, RouteTurn } from "@/types/workout";
+import { headingDegrees } from "@/lib/time-budget";
+import { buildCumulativeDistances, pointAtDistanceAlongRoute } from "@/lib/via-points";
+import type { LatLng, PaceRole, RouteSegment, RouteTurn } from "@/types/workout";
 
 /** GraphHopper instruction signs we treat as "keep going" (no spoken cue). */
 const CONTINUE_SIGN = 0;
@@ -93,15 +94,90 @@ export function instructionTexts(turns: RouteTurn[]): string[] {
   return turns.map((turn) => turn.text).filter(Boolean);
 }
 
+export function upcomingTurns(
+  turns: RouteTurn[],
+  alongMeters: number,
+  limit = 2,
+): RouteTurn[] {
+  const found: RouteTurn[] = [];
+  for (const turn of turns) {
+    if (isSilentTurn(turn)) continue;
+    if (turn.alongMeters + TURN_PASSED_METERS < alongMeters) continue;
+    found.push(turn);
+    if (found.length >= limit) break;
+  }
+  return found;
+}
+
 export function upcomingTurn(
   turns: RouteTurn[],
   alongMeters: number,
 ): RouteTurn | null {
-  for (const turn of turns) {
-    if (isSilentTurn(turn)) continue;
-    if (turn.alongMeters + TURN_PASSED_METERS >= alongMeters) return turn;
-  }
-  return null;
+  return upcomingTurns(turns, alongMeters, 1)[0] ?? null;
+}
+
+/** GraphHopper instruction signs mapped to a maneuver glyph. */
+export type TurnSignKind =
+  | "left"
+  | "right"
+  | "slightLeft"
+  | "slightRight"
+  | "sharpLeft"
+  | "sharpRight"
+  | "keepLeft"
+  | "keepRight"
+  | "uturn"
+  | "roundabout"
+  | "arrive"
+  | "continue";
+
+export function turnSignKind(sign: number): TurnSignKind {
+  if (sign === 4) return "arrive";
+  if (sign === 6) return "roundabout";
+  if (sign === -98 || sign === -8 || sign === 8) return "uturn";
+  if (sign === -7) return "keepLeft";
+  if (sign === 7) return "keepRight";
+  if (sign === -3) return "sharpLeft";
+  if (sign === 3) return "sharpRight";
+  if (sign === -1) return "slightLeft";
+  if (sign === 1) return "slightRight";
+  if (sign < 0) return "left";
+  if (sign > 0) return "right";
+  return "continue";
+}
+
+export type TurnGuidance = {
+  turn: RouteTurn;
+  location: LatLng;
+  headingDeg: number;
+  metersAway: number;
+  approaching: boolean;
+  thenTurn: RouteTurn | null;
+  thenMetersAway: number | null;
+};
+
+/** Next actionable turn snapped onto the walked polyline. */
+export function nextTurnGuidance(
+  turns: RouteTurn[],
+  segments: RouteSegment[],
+  alongMeters: number,
+): TurnGuidance | null {
+  const [turn, thenTurn] = upcomingTurns(turns, alongMeters, 2);
+  if (!turn || !segments.length) return null;
+  const hit = pointAtDistanceAlongRoute(segments, turn.alongMeters);
+  if (!hit) return null;
+  const segment = segments[hit.segmentIndex] ?? segments[0];
+  return {
+    turn,
+    location: hit.location,
+    headingDeg: headingDegrees(segment.start, segment.end),
+    metersAway: Math.max(0, turn.alongMeters - alongMeters),
+    approaching: shouldAnnounceTurn(turn, alongMeters),
+    thenTurn: thenTurn ?? null,
+    thenMetersAway: thenTurn
+      ? Math.max(0, thenTurn.alongMeters - alongMeters)
+      : null,
+  };
 }
 
 export function shouldAnnounceTurn(
@@ -120,6 +196,22 @@ export function spokenTurnText(turn: RouteTurn, alongMeters: number) {
   const rounded = Math.max(10, Math.round(remaining / 10) * 10);
   const lead = body.charAt(0).toLowerCase() + body.slice(1);
   return `In ${rounded} meters, ${lead}`;
+}
+
+export function spokenThenTurnText(turn: RouteTurn) {
+  const body = turn.text.replace(/\.$/, "");
+  const lead = body.charAt(0).toLowerCase() + body.slice(1);
+  return `Then ${lead}`;
+}
+
+export function spokenTurnCue(
+  turn: RouteTurn,
+  alongMeters: number,
+  thenTurn?: RouteTurn | null,
+) {
+  const lead = spokenTurnText(turn, alongMeters);
+  if (!thenTurn) return lead;
+  return `${lead}. ${spokenThenTurnText(thenTurn)}`;
 }
 
 export function spokenRoleText(role: PaceRole) {

@@ -389,6 +389,97 @@
   cursor: not-allowed;
 }
 
+.mapTurnBanner {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  z-index: 500;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(36, 85, 214, 0.92);
+  color: #fff;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(16, 33, 58, 0.28);
+}
+
+.mapTurnBanner strong {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.mapTurnBanner span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mapTurnBannerApproaching {
+  background: rgba(234, 88, 12, 0.94);
+}
+
+.mapThenTurn {
+  flex-basis: 100%;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.92;
+}
+
+.mapNavBar {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 520;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.mapNavBar button {
+  pointer-events: auto;
+}
+
+.placeSearchList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.placeSearchList li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fbff;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.placeSearchActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bottomPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .elevationCard {
   padding: 18px 20px 14px;
   background: var(--card);
@@ -739,6 +830,106 @@
 .walkHudActions .primaryButton,
 .walkHudActions .secondaryButton {
   margin-top: 0;
+}
+
+.pageNav {
+  min-height: 100dvh;
+  padding: 0;
+  gap: 0;
+}
+
+.pageNav .grid {
+  display: block;
+}
+
+.pageNav .sidebar {
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.pageNav .sidebar > :not(.walkHud) {
+  display: none;
+}
+
+.pageNav .walkHud {
+  position: fixed;
+  top: 58px;
+  right: 12px;
+  left: 12px;
+  z-index: 700;
+  max-height: 42dvh;
+  overflow: auto;
+  background: rgba(16, 33, 58, 0.92);
+  color: #fff;
+  border: 0;
+}
+
+.pageNav .walkHudStatus,
+.pageNav .walkHudDemo,
+.pageNav .walkHudTestCue,
+.pageNav .walkHudHint,
+.pageNav .walkHudCueNote {
+  display: none;
+}
+
+.pageNav .walkHudMain {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.pageNav .walkHudEyebrow,
+.pageNav .walkHudPattern,
+.pageNav .cueToggle,
+.pageNav .walkProgressLabel,
+.pageNav .walkSplitLine,
+.pageNav .walkNextTurn,
+.pageNav .walkHudMeta span {
+  color: #dbe7ff;
+}
+
+.pageNav .walkHudRole {
+  font-size: 34px;
+}
+
+.pageNav .walkHudCountdown {
+  font-size: 26px;
+}
+
+.pageNav .walkProgress {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.pageNav .mapPanel {
+  gap: 0;
+}
+
+.pageNav .mapFrame {
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+
+.pageNav .bottomPanel {
+  display: none;
+}
+
+.pageNav .mapTurnBanner {
+  bottom: 16px;
+  padding: 14px 16px;
+}
+
+.pageNav .mapTurnBanner strong {
+  font-size: 15px;
+}
+
+.pageNav .mapTurnBanner span {
+  font-size: 18px;
+}
+
+.pageNav .mapThenTurn {
+  font-size: 15px;
 }
 
 .instructions {

@@ -8,15 +8,16 @@ import {
   paceRoleHint,
   paceRoleLabel,
   playIntervalCue,
+  playTurnCue,
 } from "@/lib/pace-style";
 import { formatDistance, formatDuration } from "@/lib/route-math";
 import {
   shouldAnnounceTurn,
   spokenRoleText,
-  spokenTurnText,
+  spokenTurnCue,
   speakWalkCue,
   stopWalkSpeech,
-  upcomingTurn,
+  upcomingTurns,
 } from "@/lib/turns";
 import type { PaceRole, RoutePlan } from "@/types/workout";
 import {
@@ -50,6 +51,7 @@ type WalkHudProps = {
   weightKg?: number;
   finishNote?: string | null;
   onWalkFinished?: (stats: WalkFinishStats) => void;
+  onWalkingChange?: (walking: boolean) => void;
 };
 
 const DEMO_SPEED = 10;
@@ -83,6 +85,7 @@ export function WalkHud({
   weightKg = 68,
   finishNote = null,
   onWalkFinished,
+  onWalkingChange,
 }: WalkHudProps) {
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
@@ -99,8 +102,13 @@ export function WalkHud({
   const lastOffPathRef = useRef<boolean | null>(null);
   const reportedFinishRef = useRef(false);
   const onWalkFinishedRef = useRef(onWalkFinished);
-  onWalkFinishedRef.current = onWalkFinished;
+  const onWalkingChangeRef = useRef(onWalkingChange);
   const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
+
+  useEffect(() => {
+    onWalkFinishedRef.current = onWalkFinished;
+    onWalkingChangeRef.current = onWalkingChange;
+  }, [onWalkFinished, onWalkingChange]);
 
   useEffect(() => {
     setWalking(false);
@@ -159,7 +167,11 @@ export function WalkHud({
     [routePlan, elapsedSeconds, onRoute, currentPosition],
   );
   const role = progress.block?.paceRole ?? null;
-  const nextTurn = upcomingTurn(routePlan.turns ?? [], along.alongMeters);
+  const [nextTurn, thenTurn] = upcomingTurns(
+    routePlan.turns ?? [],
+    along.alongMeters,
+    2,
+  );
   const metersToTurn = nextTurn
     ? Math.max(0, nextTurn.alongMeters - along.alongMeters)
     : null;
@@ -201,6 +213,10 @@ export function WalkHud({
   }, [along, onAlongProgress]);
 
   useEffect(() => {
+    onWalkingChangeRef.current?.(walking);
+  }, [walking]);
+
+  useEffect(() => {
     return () => onAlongProgress?.(null);
   }, [onAlongProgress]);
 
@@ -223,14 +239,15 @@ export function WalkHud({
   }, [walking, cuesOn, voiceOn, role]);
 
   useEffect(() => {
-    if (!walking || !voiceOn || !nextTurn) return;
+    if (!walking || !nextTurn) return;
     if (!shouldAnnounceTurn(nextTurn, along.alongMeters)) return;
     if (lastSpokenTurnRef.current === nextTurn.alongMeters) return;
     lastSpokenTurnRef.current = nextTurn.alongMeters;
-    const phrase = spokenTurnText(nextTurn, along.alongMeters);
-    speakWalkCue(phrase);
+    const phrase = spokenTurnCue(nextTurn, along.alongMeters, thenTurn);
+    if (cuesOn) playTurnCue();
+    if (voiceOn) speakWalkCue(phrase);
     setLastCueNote(phrase);
-  }, [walking, voiceOn, nextTurn, along.alongMeters]);
+  }, [walking, cuesOn, voiceOn, nextTurn, thenTurn, along.alongMeters]);
 
   useEffect(() => {
     if (!walking || !gpsEnabled || distanceToRouteMeters == null) return;
@@ -498,6 +515,7 @@ export function WalkHud({
         {nextTurn && !finished ? (
           <p className={styles.walkNextTurn}>
             Next turn in {formatDistance(metersToTurn ?? 0)}: {nextTurn.text}
+            {thenTurn ? ` · Then ${thenTurn.text}` : ""}
           </p>
         ) : walking ? (
           <p className={styles.walkNextTurn}>No further turns — continue to the finish.</p>
@@ -561,7 +579,7 @@ export function WalkHud({
         <p className={styles.walkHudCueNote}>{lastCueNote}</p>
       ) : null}
 
-      <label className={styles.cueToggle}>
+      <label className={`${styles.cueToggle} ${styles.walkHudDemo}`}>
         <input
           type="checkbox"
           checked={demoFast}
@@ -590,7 +608,7 @@ export function WalkHud({
         </button>
       </div>
       <button
-        className={styles.secondaryButton}
+        className={`${styles.secondaryButton} ${styles.walkHudTestCue}`}
         type="button"
         onClick={() => handleTestCue(role ?? "push")}
       >

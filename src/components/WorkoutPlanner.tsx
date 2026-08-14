@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { WalkHud } from "@/components/WalkHud";
 import { ElevationProfileChart } from "@/components/ElevationProfile";
+import { PlaceSearch } from "@/components/PlaceSearch";
 import { downloadRouteGpx } from "@/lib/gpx";
 import { buildElevationProfile } from "@/lib/elevation-profile";
 import {
@@ -14,7 +15,7 @@ import {
   parseShareSearch,
   shareUrlFromState,
 } from "@/lib/share-url";
-import { isSilentTurn } from "@/lib/turns";
+import { isSilentTurn, nextTurnGuidance } from "@/lib/turns";
 import {
   headingDegrees,
   parseWalkShape,
@@ -25,7 +26,7 @@ import {
 } from "@/lib/time-budget";
 import { MAX_AVOIDANCE_VIAS } from "@/lib/graphhopper";
 import { walkedPathPoints, type AlongPathProgress } from "@/lib/walk-along";
-import { isOnRoute, ON_ROUTE_MAX_METERS } from "@/lib/walk-follow";
+import { isOnRoute, ON_ROUTE_MAX_METERS, rejoinPathGuidance } from "@/lib/walk-follow";
 import { buildSplitMarkers } from "@/lib/walk-splits";
 import { routePreferenceLabel } from "@/lib/route-preference";
 import { pacePatternName, paceRoleLabel } from "@/lib/pace-style";
@@ -67,6 +68,7 @@ import {
   upsertViaFromHandle,
   viaFromBlockedPathClick,
   viasSignature,
+  pointAtDistanceAlongRoute,
   type ViaHistory,
   type ViaWaypoint,
 } from "@/lib/via-points";
@@ -78,6 +80,7 @@ import {
   metsFromVo2,
   vo2FromSpeedAndGrade,
 } from "@/lib/training";
+import type { GeocodeHit } from "@/lib/geocode";
 import type {
   EffortPreference,
   LatLng,
@@ -263,6 +266,10 @@ function WorkoutPlannerClient() {
   const [followWalker, setFollowWalker] = useState(true);
   const [followNonce, setFollowNonce] = useState(0);
   const [gpsHeadingDeg, setGpsHeadingDeg] = useState<number | null>(null);
+  const [navMode, setNavMode] = useState(false);
+  const [navDarkMap, setNavDarkMap] = useState(true);
+  const [headingUpOn, setHeadingUpOn] = useState(true);
+  const [layoutNonce, setLayoutNonce] = useState(0);
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
@@ -305,6 +312,36 @@ function WorkoutPlannerClient() {
     () => (routePlan ? buildSplitMarkers(routePlan) : []),
     [routePlan],
   );
+
+  const nextTurn = useMemo(() => {
+    if (!routePlan) return null;
+    return nextTurnGuidance(
+      routePlan.turns ?? [],
+      routePlan.segments,
+      alongProgress?.alongMeters ?? 0,
+    );
+  }, [routePlan, alongProgress?.alongMeters]);
+
+  const rejoin = useMemo(() => {
+    if (!routePlan || !gpsConsent || !currentPosition) return null;
+    return rejoinPathGuidance(currentPosition, routePlan.segments);
+  }, [routePlan, gpsConsent, currentPosition]);
+
+  const pathHeadingDeg = useMemo(() => {
+    if (!routePlan?.segments.length) return null;
+    const hit = pointAtDistanceAlongRoute(
+      routePlan.segments,
+      alongProgress?.alongMeters ?? 0,
+    );
+    if (!hit) return null;
+    const segment =
+      routePlan.segments[hit.segmentIndex] ?? routePlan.segments[0];
+    return headingDegrees(segment.start, segment.end);
+  }, [routePlan, alongProgress?.alongMeters]);
+
+  const headingUpDeg =
+    navMode && headingUpOn ? gpsHeadingDeg ?? pathHeadingDeg : null;
+  const mapTheme = navMode && navDarkMap ? "dark" : "light";
 
   function commitViaPoints(next: ViaWaypoint[]) {
     const ordered = sortViasBySequence(next);
@@ -1002,8 +1039,44 @@ function WorkoutPlannerClient() {
     setFollowNonce((nonce) => nonce + 1);
   }
 
+  function enterNavMode() {
+    if (!routePlan) return;
+    setNavMode(true);
+    setPickingEnabled(false);
+    setFollowWalker(true);
+    setFollowNonce((nonce) => nonce + 1);
+    setLayoutNonce((nonce) => nonce + 1);
+    if (!gpsConsent) {
+      setGpsConsent(true);
+    }
+  }
+
+  function exitNavMode() {
+    setNavMode(false);
+    setLayoutNonce((nonce) => nonce + 1);
+  }
+
+  function handleWalkingChange(walking: boolean) {
+    if (walking) enterNavMode();
+  }
+
+  function handleSearchStart(hit: GeocodeHit) {
+    setStart(hit.location);
+    setPickingEnabled(true);
+    setFitNonce((nonce) => nonce + 1);
+    setSaveNote(`Start set to ${hit.label}. Build when you are ready.`);
+  }
+
+  function handleSearchEnd(hit: GeocodeHit) {
+    setEnd(hit.location);
+    setPickingEnabled(true);
+    setFitNonce((nonce) => nonce + 1);
+    setSaveNote(`End set to ${hit.label}. Build when you are ready.`);
+  }
+
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page}${navMode ? ` ${styles.pageNav}` : ""}`}>
+      {navMode ? null : (
       <section className={styles.hero}>
         <div>
           <p className={styles.eyebrow}>Aerobic route pacing</p>
@@ -1021,6 +1094,7 @@ function WorkoutPlannerClient() {
           </span>
         </div>
       </section>
+      )}
 
       <main className={styles.grid}>
         <aside className={styles.sidebar}>
@@ -1029,6 +1103,13 @@ function WorkoutPlannerClient() {
             <p className={styles.cardText}>
               {getWorkoutCopy(form.workoutLevel)} with a live speed target tuned to route slope.
             </p>
+
+            <PlaceSearch
+              near={start}
+              disabled={loading}
+              onSetStart={handleSearchStart}
+              onSetEnd={handleSearchEnd}
+            />
 
             <label className={styles.field}>
               <span>Workout level</span>
@@ -1507,6 +1588,7 @@ function WorkoutPlannerClient() {
               weightKg={form.weightKg}
               finishNote={finishNote}
               onWalkFinished={handleWalkFinished}
+              onWalkingChange={handleWalkingChange}
             />
           ) : null}
 
@@ -1523,13 +1605,13 @@ function WorkoutPlannerClient() {
               hazards={routePlan?.hazards ?? []}
               currentPosition={currentPosition}
               onPickPoint={handleMapPick}
-              pickingEnabled={pickingEnabled}
-              viaPoints={viaPoints}
-              pathHandles={pathHandles}
+              pickingEnabled={pickingEnabled && !navMode}
+              viaPoints={navMode ? [] : viaPoints}
+              pathHandles={navMode ? [] : pathHandles}
               onViaMoved={handleViaMoved}
               onViaRemoved={handleViaRemoved}
               onHandleDropped={handleHandleDropped}
-              onPathClicked={handlePathClicked}
+              onPathClicked={navMode ? undefined : handlePathClicked}
               headingPoint={form.walkShape === "loop" ? headingPoint : null}
               endLabel={
                 form.walkShape === "out_and_back" ? "Turnaround toward" : "End"
@@ -1549,8 +1631,44 @@ function WorkoutPlannerClient() {
               onFollowInterrupted={() => setFollowWalker(false)}
               gpsHeadingDeg={gpsHeadingDeg}
               splitMarkers={splitMarkers}
+              nextTurn={rejoin ? null : nextTurn}
+              rejoin={rejoin}
+              mapTheme={mapTheme}
+              headingUpDeg={headingUpDeg}
+              layoutNonce={layoutNonce}
             />
-            {routePlan ? (
+            {rejoin ? (
+              <div
+                className={`${styles.mapTurnBanner} ${styles.mapTurnBannerApproaching}`}
+              >
+                <strong>
+                  Off path · {formatDistance(rejoin.metersAway)}
+                </strong>
+                <span>
+                  This way back to the route — intervals stay on the clock
+                  until you rejoin.
+                </span>
+              </div>
+            ) : nextTurn ? (
+              <div
+                className={`${styles.mapTurnBanner}${
+                  nextTurn.approaching ? ` ${styles.mapTurnBannerApproaching}` : ""
+                }`}
+              >
+                <strong>
+                  {nextTurn.approaching
+                    ? "Turn now"
+                    : `In ${formatDistance(nextTurn.metersAway)}`}
+                </strong>
+                <span>{nextTurn.turn.text}</span>
+                {nextTurn.thenTurn ? (
+                  <em className={styles.mapThenTurn}>
+                    Then {nextTurn.thenTurn.text}
+                  </em>
+                ) : null}
+              </div>
+            ) : null}
+            {routePlan && !navMode ? (
               <div className={styles.mapPathOverlay}>
                 <strong>
                   Click the path to dodge a blocked street ({pathHandles.length} handles)
@@ -1567,6 +1685,13 @@ function WorkoutPlannerClient() {
                       : ""}
                 </span>
                 <div className={styles.mapOverlayActions}>
+                  <button
+                    type="button"
+                    className={styles.mapOverlayButton}
+                    onClick={enterNavMode}
+                  >
+                    Navigate
+                  </button>
                   <button
                     type="button"
                     className={styles.mapOverlayButton}
@@ -1600,6 +1725,39 @@ function WorkoutPlannerClient() {
                     Clear vias
                   </button>
                 </div>
+              </div>
+            ) : null}
+            {routePlan && navMode ? (
+              <div className={styles.mapNavBar}>
+                <button
+                  type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={exitNavMode}
+                >
+                  Planner
+                </button>
+                <button
+                  type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={handleRecenter}
+                  disabled={!currentPosition}
+                >
+                  {followWalker && currentPosition ? "Following" : "Recenter"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={() => setNavDarkMap((value) => !value)}
+                >
+                  {navDarkMap ? "Light map" : "Dark map"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={() => setHeadingUpOn((value) => !value)}
+                >
+                  {headingUpOn ? "North up" : "Heading up"}
+                </button>
               </div>
             ) : null}
           </div>

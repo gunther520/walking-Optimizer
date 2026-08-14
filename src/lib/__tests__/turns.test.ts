@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { buildSegments } from "@/lib/route-math";
 import {
   instructionTexts,
   isSilentTurn,
+  nextTurnGuidance,
   offsetTurns,
   parseGraphHopperTurns,
   shouldAnnounceTurn,
   spokenRoleText,
+  spokenThenTurnText,
+  spokenTurnCue,
   spokenTurnText,
+  turnSignKind,
   upcomingTurn,
 } from "@/lib/turns";
 import type { LatLng } from "@/types/workout";
@@ -111,5 +116,69 @@ describe("spoken turns", () => {
     const shifted = offsetTurns([left], 500);
     expect(shifted[0].alongMeters).toBe(620);
     expect(shifted[0].text).toBe(left.text);
+  });
+
+  it("snaps the next turn onto the polyline with heading and remaining meters", () => {
+    const points = northLine();
+    const turns = parseGraphHopperTurns(
+      [
+        {
+          text: "Continue onto Nathan Road",
+          sign: 0,
+          interval: [0, 1],
+          distance: 111,
+        },
+        {
+          text: "Turn left onto Oak Street",
+          sign: -2,
+          interval: [1, 2],
+          distance: 111,
+        },
+      ],
+      points,
+    );
+    const segments = buildSegments(points);
+    const far = nextTurnGuidance(turns, segments, 10);
+    expect(far?.turn.text).toBe("Turn left onto Oak Street");
+    expect(far?.metersAway).toBeGreaterThan(80);
+    expect(far?.approaching).toBe(false);
+    expect(far?.location.lat).toBeGreaterThan(points[0].lat);
+    expect(Math.min(far!.headingDeg, 360 - far!.headingDeg)).toBeLessThan(8);
+
+    const near = nextTurnGuidance(turns, segments, far!.turn.alongMeters - 30);
+    expect(near?.approaching).toBe(true);
+    expect(near?.metersAway).toBeLessThanOrEqual(30);
+  });
+
+  it("includes the following maneuver as a then-turn", () => {
+    const points = northLine();
+    const turns = parseGraphHopperTurns(
+      [
+        { text: "Turn left onto Oak Street", sign: -2, interval: [1, 2], distance: 111 },
+        { text: "Turn right onto Pine Street", sign: 2, interval: [2, 3], distance: 111 },
+      ],
+      points,
+    );
+    const guidance = nextTurnGuidance(turns, buildSegments(points), 10);
+    expect(guidance?.turn.text).toBe("Turn left onto Oak Street");
+    expect(guidance?.thenTurn?.text).toBe("Turn right onto Pine Street");
+    expect(guidance?.thenMetersAway).toBeGreaterThan(guidance!.metersAway);
+  });
+
+  it("maps GraphHopper signs to maneuver kinds", () => {
+    expect(turnSignKind(-2)).toBe("left");
+    expect(turnSignKind(2)).toBe("right");
+    expect(turnSignKind(-1)).toBe("slightLeft");
+    expect(turnSignKind(6)).toBe("roundabout");
+    expect(turnSignKind(-8)).toBe("uturn");
+    expect(turnSignKind(4)).toBe("arrive");
+    expect(turnSignKind(0)).toBe("continue");
+  });
+
+  it("adds a then-clause to the spoken turn cue", () => {
+    expect(spokenThenTurnText(left)).toBe("Then turn left onto Oak Street");
+    expect(spokenTurnCue(left, 80, { ...left, text: "Turn right onto Pine Street" })).toBe(
+      "In 40 meters, turn left onto Oak Street. Then turn right onto Pine Street",
+    );
   });
 });

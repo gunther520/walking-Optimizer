@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { buildSegments } from "@/lib/route-math";
 import {
   FOLLOW_PAN_MIN_METERS,
   isOnRoute,
+  nearestPointOnRoute,
   offPathMessage,
   ON_ROUTE_MAX_METERS,
+  rejoinPathGuidance,
   shouldPanToFollow,
 } from "@/lib/walk-follow";
 
@@ -40,5 +43,33 @@ describe("follow-me panning", () => {
   it("pans after a real step", () => {
     const farther = { lat: 22.3004, lng: 114.17 };
     expect(shouldPanToFollow(start, farther)).toBe(true);
+  });
+});
+
+describe("rejoin path (no reroute)", () => {
+  const points = [
+    { lat: 22.3, lng: 114.17 },
+    { lat: 22.302, lng: 114.17 },
+  ];
+  const segments = buildSegments(points);
+
+  it("snaps to the nearest point on the polyline", () => {
+    const east = { lat: 22.301, lng: 114.171 };
+    const nearest = nearestPointOnRoute(east, segments);
+    expect(nearest?.location.lat).toBeCloseTo(22.301, 3);
+    expect(nearest?.distanceMeters).toBeGreaterThan(40);
+  });
+
+  it("returns a bearing back onto the path when GPS is off-route", () => {
+    const east = { lat: 22.301, lng: 114.171 };
+    const rejoin = rejoinPathGuidance(east, segments);
+    expect(rejoin).not.toBeNull();
+    expect(rejoin!.metersAway).toBeGreaterThan(ON_ROUTE_MAX_METERS);
+    expect(rejoin!.headingDeg).toBeGreaterThan(240);
+    expect(rejoin!.headingDeg).toBeLessThan(300);
+  });
+
+  it("is silent when the fix is already on the path", () => {
+    expect(rejoinPathGuidance({ lat: 22.301, lng: 114.17 }, segments)).toBeNull();
   });
 });
