@@ -163,3 +163,49 @@ export function playIntervalCue(role: PaceRole) {
     // Ignore audio failures (autoplay policy / unsupported).
   }
 }
+
+/** Short double-beep + pulse when a turn is within announcement range. */
+export function playTurnCue() {
+  if (typeof window === "undefined") return;
+
+  try {
+    if ("vibrate" in navigator) {
+      navigator.vibrate([70, 50, 140]);
+    }
+  } catch {
+    // Ignore vibration failures (unsupported / denied).
+  }
+
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    for (const [offset, freq] of [
+      [0, 740],
+      [0.16, 980],
+    ] as const) {
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = freq;
+      gain.gain.value = 0.0001;
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      const start = now + offset;
+      gain.gain.exponentialRampToValueAtTime(0.12, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.14);
+      oscillator.start(start);
+      oscillator.stop(start + 0.16);
+    }
+    window.setTimeout(() => {
+      void ctx.close();
+    }, 500);
+  } catch {
+    // Ignore audio failures (autoplay policy / unsupported).
+  }
+}

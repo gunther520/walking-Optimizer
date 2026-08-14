@@ -27,7 +27,9 @@ import {
 } from "@/lib/walk-follow";
 import type { PathHandle, ViaWaypoint } from "@/lib/via-points";
 import { formatSplitLabel, type SplitMarker } from "@/lib/walk-splits";
-import type { TurnGuidance } from "@/lib/turns";
+import type { TurnGuidance, TurnSignKind } from "@/lib/turns";
+import { turnSignKind } from "@/lib/turns";
+import type { RejoinGuidance } from "@/lib/walk-follow";
 
 type LeafletMapProps = {
   start: LatLng | null;
@@ -63,6 +65,12 @@ type LeafletMapProps = {
   gpsHeadingDeg?: number | null;
   splitMarkers?: SplitMarker[];
   nextTurn?: TurnGuidance | null;
+  rejoin?: RejoinGuidance | null;
+  mapTheme?: "light" | "dark";
+  /** Rotate the map so this geographic heading is screen-up. */
+  headingUpDeg?: number | null;
+  /** Bump when the map container size changes (e.g. walk nav). */
+  layoutNonce?: number;
 };
 
 function ClickHandler({
@@ -161,6 +169,15 @@ function FollowWalker({
   return null;
 }
 
+function InvalidateOnChange({ nonce }: { nonce: number }) {
+  const map = useMap();
+  useEffect(() => {
+    const id = window.setTimeout(() => map.invalidateSize(), 80);
+    return () => window.clearTimeout(id);
+  }, [map, nonce]);
+  return null;
+}
+
 function createYouIcon(headingDeg: number | null) {
   const rotation =
     headingDeg != null && Number.isFinite(headingDeg)
@@ -232,15 +249,84 @@ function createKmIcon(label: string) {
   });
 }
 
-function createTurnIcon(headingDeg: number, approaching: boolean) {
+function turnManeuverOffset(kind: TurnSignKind) {
+  if (kind === "slightLeft") return -45;
+  if (kind === "left") return -90;
+  if (kind === "sharpLeft") return -135;
+  if (kind === "keepLeft") return -30;
+  if (kind === "slightRight") return 45;
+  if (kind === "right") return 90;
+  if (kind === "sharpRight") return 135;
+  if (kind === "keepRight") return 30;
+  if (kind === "uturn") return 180;
+  return 0;
+}
+
+function createTurnIcon(kind: TurnSignKind, headingDeg: number, approaching: boolean) {
   const color = approaching ? "#ea580c" : "#2455d6";
+  const rotation = `rotate(${Math.round(headingDeg + turnManeuverOffset(kind))}deg)`;
+  const inner =
+    kind === "roundabout"
+      ? `<div style="
+            width: 36px;
+            height: 36px;
+            display: grid;
+            place-items: center;
+            font-size: 26px;
+            font-weight: 800;
+            color: ${color};
+            transform: translate(-50%, -50%) rotate(${Math.round(headingDeg)}deg);
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+          ">↻</div>`
+      : kind === "arrive"
+        ? `<div style="
+              width: 18px;
+              height: 18px;
+              transform: translate(-50%, -50%);
+              background: ${color};
+              border: 2px solid #fff;
+              border-radius: 4px;
+              box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+            "></div>`
+        : `<div style="
+            width: 36px;
+            height: 36px;
+            transform: translate(-50%, -50%) ${rotation};
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
+          ">
+            <div style="
+              width: 0;
+              height: 0;
+              margin: 0 auto;
+              border-left: 10px solid transparent;
+              border-right: 10px solid transparent;
+              border-bottom: 16px solid ${color};
+            "></div>
+            <div style="
+              width: 12px;
+              height: 12px;
+              margin: 1px auto 0;
+              border-radius: 50%;
+              background: ${color};
+              border: 2px solid #fff;
+            "></div>
+          </div>`;
+  return L.divIcon({
+    className: "turn-icon",
+    html: inner,
+    iconSize: [36, 36],
+    iconAnchor: [0, 0],
+  });
+}
+
+function createRejoinIcon(headingDeg: number) {
   const rotation = `rotate(${Math.round(headingDeg)}deg)`;
   return L.divIcon({
     className: "turn-icon",
     html: `
       <div style="
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         transform: translate(-50%, -50%) ${rotation};
         filter: drop-shadow(0 1px 3px rgba(0,0,0,0.4));
       ">
@@ -248,21 +334,13 @@ function createTurnIcon(headingDeg: number, approaching: boolean) {
           width: 0;
           height: 0;
           margin: 0 auto;
-          border-left: 10px solid transparent;
-          border-right: 10px solid transparent;
-          border-bottom: 16px solid ${color};
-        "></div>
-        <div style="
-          width: 12px;
-          height: 12px;
-          margin: 1px auto 0;
-          border-radius: 50%;
-          background: ${color};
-          border: 2px solid #fff;
+          border-left: 9px solid transparent;
+          border-right: 9px solid transparent;
+          border-bottom: 16px solid #d97706;
         "></div>
       </div>
     `,
-    iconSize: [36, 36],
+    iconSize: [34, 34],
     iconAnchor: [0, 0],
   });
 }
@@ -475,6 +553,10 @@ export function LeafletMap({
   gpsHeadingDeg = null,
   splitMarkers = [],
   nextTurn = null,
+  rejoin = null,
+  mapTheme = "light",
+  headingUpDeg = null,
+  layoutNonce = 0,
 }: LeafletMapProps) {
   const mapRef = useRef<LeafletMapType | null>(null);
   const mounted = typeof window !== "undefined";
@@ -498,10 +580,25 @@ export function LeafletMap({
     nextTurn != null && Number.isFinite(nextTurn.headingDeg)
       ? Math.round(nextTurn.headingDeg / 8) * 8
       : null;
+  const turnKind = nextTurn ? turnSignKind(nextTurn.turn.sign) : null;
   const turnIcon = useMemo(() => {
-    if (turnHeadingBucket == null || !nextTurn) return null;
-    return createTurnIcon(turnHeadingBucket, nextTurn.approaching);
-  }, [turnHeadingBucket, nextTurn?.approaching]);
+    if (turnHeadingBucket == null || !turnKind || nextTurn == null) return null;
+    return createTurnIcon(turnKind, turnHeadingBucket, nextTurn.approaching);
+  }, [turnHeadingBucket, turnKind, nextTurn]);
+  const rejoinHeadingBucket =
+    rejoin != null && Number.isFinite(rejoin.headingDeg)
+      ? Math.round(rejoin.headingDeg / 8) * 8
+      : null;
+  const rejoinIcon = useMemo(() => {
+    if (rejoinHeadingBucket == null) return null;
+    return createRejoinIcon(rejoinHeadingBucket);
+  }, [rejoinHeadingBucket]);
+  const mapBearingBucket =
+    headingUpDeg != null && Number.isFinite(headingUpDeg)
+      ? Math.round(headingUpDeg / 5) * 5
+      : null;
+  const headingUp = mapBearingBucket != null;
+  const darkTiles = mapTheme === "dark";
 
   useEffect(() => {
     return () => {
@@ -553,19 +650,50 @@ export function LeafletMap({
       : undefined;
 
   return (
+    <div
+      style={{
+        height: "100%",
+        width: "100%",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      <div
+        style={
+          headingUp
+            ? {
+                position: "absolute",
+                inset: "-30%",
+                transform: `rotate(${-mapBearingBucket}deg)`,
+                transformOrigin: "center center",
+              }
+            : { height: "100%", width: "100%" }
+        }
+      >
     <MapContainer
       center={[22.3193, 114.1694]}
       zoom={13}
-      scrollWheelZoom
+      scrollWheelZoom={!headingUp}
+      dragging={!headingUp}
+      zoomControl={!headingUp}
       style={{ height: "100%", width: "100%" }}
       ref={(map) => {
         mapRef.current = map;
       }}
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution={
+          darkTiles
+            ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }
+        url={
+          darkTiles
+            ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        }
       />
+      <InvalidateOnChange nonce={layoutNonce} />
       <FitRouteBounds routePoints={routePoints} fitNonce={fitNonce} />
       <FollowWalker
         target={followTarget}
@@ -710,6 +838,33 @@ export function LeafletMap({
           </Tooltip>
         </Marker>
       ) : null}
+      {rejoin && rejoinIcon ? (
+        <>
+          <Polyline
+            positions={[
+              [rejoin.from.lat, rejoin.from.lng],
+              [rejoin.onto.lat, rejoin.onto.lng],
+            ]}
+            pathOptions={{
+              color: "#d97706",
+              weight: 4,
+              dashArray: "8 8",
+              opacity: 0.9,
+            }}
+            interactive={false}
+          />
+          <Marker
+            position={[rejoin.onto.lat, rejoin.onto.lng]}
+            icon={rejoinIcon}
+            zIndexOffset={850}
+            interactive={false}
+          >
+            <Tooltip direction="top" offset={[0, -12]}>
+              Rejoin path
+            </Tooltip>
+          </Marker>
+        </>
+      ) : null}
       {start ? (
         <CircleMarker center={[start.lat, start.lng]} radius={9} pathOptions={{ color: "#16a34a" }}>
           <Tooltip direction="top" offset={[0, -10]} permanent>
@@ -763,5 +918,7 @@ export function LeafletMap({
         </CircleMarker>
       ) : null}
     </MapContainer>
+      </div>
+    </div>
   );
 }

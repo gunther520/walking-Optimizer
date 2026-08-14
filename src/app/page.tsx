@@ -1,5 +1,11 @@
 import { WorkoutPlanner } from "@/components/WorkoutPlanner";
+import { PwaRegister } from "@/components/PwaRegister";
 
 export default function Home() {
-  return <WorkoutPlanner />;
+  return (
+    <>
+      <PwaRegister />
+      <WorkoutPlanner />
+    </>
+  );
 }

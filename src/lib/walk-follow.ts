@@ -1,5 +1,10 @@
-import { formatDistance, haversineDistance } from "@/lib/route-math";
-import type { LatLng } from "@/types/workout";
+import {
+  formatDistance,
+  haversineDistance,
+  projectPointOntoSegment,
+} from "@/lib/route-math";
+import { headingDegrees } from "@/lib/time-budget";
+import type { LatLng, RouteSegment } from "@/types/workout";
 
 /** GPS closer than this is treated as on the planned walking path. */
 export const ON_ROUTE_MAX_METERS = 40;
@@ -31,4 +36,62 @@ export function shouldPanToFollow(
 ) {
   if (!previous) return true;
   return haversineDistance(previous, next) >= minMeters;
+}
+
+export type RejoinGuidance = {
+  from: LatLng;
+  onto: LatLng;
+  headingDeg: number;
+  metersAway: number;
+};
+
+/** Closest point on the planned polyline to a GPS fix. */
+export function nearestPointOnRoute(
+  position: LatLng,
+  segments: RouteSegment[],
+) {
+  if (!segments.length) return null;
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestLocation: LatLng = segments[0].start;
+
+  for (const segment of segments) {
+    const projected = projectPointOntoSegment(
+      position,
+      segment.start,
+      segment.end,
+    );
+    const distanceMeters = haversineDistance(position, projected);
+    if (distanceMeters < bestDistance) {
+      bestDistance = distanceMeters;
+      bestIndex = segment.index;
+      bestLocation = { lat: projected.lat, lng: projected.lng };
+    }
+  }
+
+  return {
+    location: bestLocation,
+    distanceMeters: bestDistance,
+    segmentIndex: bestIndex,
+  };
+}
+
+/**
+ * When GPS is off the path, point back to the nearest snapped location.
+ * Does not call GraphHopper — just a bearing to rejoin.
+ */
+export function rejoinPathGuidance(
+  position: LatLng | null,
+  segments: RouteSegment[],
+  maxOnRouteMeters = ON_ROUTE_MAX_METERS,
+): RejoinGuidance | null {
+  if (!position || !segments.length) return null;
+  const nearest = nearestPointOnRoute(position, segments);
+  if (!nearest || nearest.distanceMeters <= maxOnRouteMeters) return null;
+  return {
+    from: position,
+    onto: nearest.location,
+    headingDeg: headingDegrees(position, nearest.location),
+    metersAway: nearest.distanceMeters,
+  };
 }
