@@ -474,10 +474,45 @@
   gap: 8px;
 }
 
-.bottomPanel {
+.gpsNote {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.plannerFold {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
+}
+
+.plannerFold > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.plannerFold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plannerFold[open] > summary {
+  margin-bottom: 8px;
 }
 
 .elevationCard {
@@ -806,7 +841,7 @@
 
 .walkHudMeta {
   display: grid;
-  grid-template-columns: 1.4fr 0.6fr;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 12px;
 }
 
@@ -853,11 +888,17 @@
   display: none;
 }
 
+.pageNav .mapNavBar {
+  top: max(14px, env(safe-area-inset-top, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+}
+
 .pageNav .walkHud {
   position: fixed;
-  top: 58px;
-  right: 12px;
-  left: 12px;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
   z-index: 700;
   max-height: 42dvh;
   overflow: auto;
@@ -916,7 +957,9 @@
 }
 
 .pageNav .mapTurnBanner {
-  bottom: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  left: max(14px, env(safe-area-inset-left, 0px));
+  right: max(14px, env(safe-area-inset-right, 0px));
   padding: 14px 16px;
 }
 
@@ -952,8 +995,30 @@
     display: grid;
   }
 
+  .mapPanel {
+    order: -1;
+  }
+
   .callout {
     max-width: none;
+  }
+}
+
+@media (min-width: 1181px) {
+  .plannerFold > summary {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .plannerFold {
+    display: contents;
   }
 }
 

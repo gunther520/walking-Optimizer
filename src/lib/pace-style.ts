@@ -46,11 +46,41 @@ export function findPaceBlockAtSegment(
   return { block: paceBlocks[index], index };
 }
 
+export function findPaceBlockAtAlongMeters(
+  paceBlocks: PaceBlockSummary[],
+  alongMeters: number,
+) {
+  if (!paceBlocks.length) {
+    return { block: null as PaceBlockSummary | null, index: -1, remainingSeconds: 0 };
+  }
+  let walked = 0;
+  for (let i = 0; i < paceBlocks.length; i += 1) {
+    const block = paceBlocks[i];
+    const end = walked + block.distanceMeters;
+    const last = i === paceBlocks.length - 1;
+    if (alongMeters < end || last) {
+      const into = Math.max(0, alongMeters - walked);
+      const fraction =
+        block.distanceMeters > 0
+          ? Math.min(1, into / block.distanceMeters)
+          : 1;
+      return {
+        block,
+        index: i,
+        remainingSeconds: Math.max(0, block.durationSeconds * (1 - fraction)),
+      };
+    }
+    walked = end;
+  }
+  const last = paceBlocks[paceBlocks.length - 1];
+  return { block: last, index: paceBlocks.length - 1, remainingSeconds: 0 };
+}
+
 export function getWalkProgress(
   plan: RoutePlan,
   segmentIndex: number | null,
   elapsedSeconds: number,
-  options?: { onRoute?: boolean },
+  options?: { onRoute?: boolean; alongMeters?: number },
 ): {
   block: PaceBlockSummary | null;
   blockIndex: number;
@@ -73,6 +103,19 @@ export function getWalkProgress(
   // On a PC, geolocation often snaps to a far-off "nearest" segment and would
   // freeze the HUD if we preferred it over the interval clock.
   const onRoute = options?.onRoute === true;
+  const alongMeters = options?.alongMeters;
+  if (onRoute && alongMeters != null && Number.isFinite(alongMeters)) {
+    const found = findPaceBlockAtAlongMeters(blocks, alongMeters);
+    if (found.block) {
+      return {
+        block: found.block,
+        blockIndex: found.index,
+        remainingSeconds: found.remainingSeconds,
+        nextBlock: blocks[found.index + 1] ?? null,
+        mode: "gps",
+      };
+    }
+  }
   if (onRoute && segmentIndex != null && segmentIndex >= 0) {
     const found = findPaceBlockAtSegment(blocks, segmentIndex);
     if (found.block) {

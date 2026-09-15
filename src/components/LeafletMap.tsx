@@ -461,6 +461,7 @@ function DraggableViaMarker({
 }) {
   const map = useMap();
   const icon = useMemo(() => createViaIcon(), []);
+  const draggedRef = useRef(false);
 
   return (
     <Marker
@@ -470,6 +471,7 @@ function DraggableViaMarker({
       zIndexOffset={800}
       eventHandlers={{
         dragstart() {
+          draggedRef.current = true;
           map.dragging.disable();
         },
         dragend(event) {
@@ -477,6 +479,14 @@ function DraggableViaMarker({
           const marker = event.target as L.Marker;
           const { lat, lng } = marker.getLatLng();
           onMoved(via.id, { lat, lng });
+          window.setTimeout(() => {
+            draggedRef.current = false;
+          }, 0);
+        },
+        click(event) {
+          L.DomEvent.stopPropagation(event);
+          if (draggedRef.current) return;
+          onRemoved(via.id);
         },
         dblclick(event) {
           L.DomEvent.stopPropagation(event);
@@ -485,7 +495,7 @@ function DraggableViaMarker({
       }}
     >
       <Tooltip direction="top" offset={[0, -10]}>
-        Via — drag to dodge a blockage · double-click to remove
+        Via — drag to dodge a blockage · tap to remove
       </Tooltip>
     </Marker>
   );

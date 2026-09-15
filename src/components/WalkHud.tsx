@@ -10,9 +10,9 @@ import {
   playIntervalCue,
   playTurnCue,
 } from "@/lib/pace-style";
-import { formatDistance, formatDuration } from "@/lib/route-math";
+import { formatDistance, formatDuration, formatPaceMinPerKm } from "@/lib/route-math";
 import {
-  shouldAnnounceTurn,
+  nextTurnDueForCue,
   spokenRoleText,
   spokenTurnCue,
   speakWalkCue,
@@ -98,7 +98,7 @@ export function WalkHud({
   const pausedElapsedRef = useRef(0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
-  const lastSpokenTurnRef = useRef<number | null>(null);
+  const lastSpokenTurnRef = useRef<Set<number>>(new Set());
   const lastOffPathRef = useRef<boolean | null>(null);
   const reportedFinishRef = useRef(false);
   const onWalkFinishedRef = useRef(onWalkFinished);
@@ -116,7 +116,7 @@ export function WalkHud({
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
     lastRoleRef.current = null;
-    lastSpokenTurnRef.current = null;
+    lastSpokenTurnRef.current = new Set();
     lastOffPathRef.current = null;
     reportedFinishRef.current = false;
     setFinished(false);
@@ -152,19 +152,22 @@ export function WalkHud({
     return () => window.clearInterval(timer);
   }, [walking, demoFast]);
 
+  const along = useMemo(
+    () =>
+      getAlongPathProgress(routePlan, elapsedSeconds, {
+        onRoute: walking && onRoute,
+        currentPosition,
+      }),
+    [routePlan, elapsedSeconds, onRoute, currentPosition, walking],
+  );
   const progress = getWalkProgress(
     routePlan,
     liveSegmentIndex,
     elapsedSeconds,
-    { onRoute },
-  );
-  const along = useMemo(
-    () =>
-      getAlongPathProgress(routePlan, elapsedSeconds, {
-        onRoute,
-        currentPosition,
-      }),
-    [routePlan, elapsedSeconds, onRoute, currentPosition],
+    {
+      onRoute: walking && onRoute,
+      alongMeters: along.alongMeters,
+    },
   );
   const role = progress.block?.paceRole ?? null;
   const [nextTurn, thenTurn] = upcomingTurns(
@@ -239,15 +242,22 @@ export function WalkHud({
   }, [walking, cuesOn, voiceOn, role]);
 
   useEffect(() => {
-    if (!walking || !nextTurn) return;
-    if (!shouldAnnounceTurn(nextTurn, along.alongMeters)) return;
-    if (lastSpokenTurnRef.current === nextTurn.alongMeters) return;
-    lastSpokenTurnRef.current = nextTurn.alongMeters;
-    const phrase = spokenTurnCue(nextTurn, along.alongMeters, thenTurn);
+    if (!walking) return;
+    const due = nextTurnDueForCue(
+      routePlan.turns ?? [],
+      along.alongMeters,
+      lastSpokenTurnRef.current,
+    );
+    if (!due) return;
+    lastSpokenTurnRef.current.add(due.alongMeters);
+    const following = upcomingTurns(routePlan.turns ?? [], along.alongMeters, 2).find(
+      (turn) => turn.alongMeters > due.alongMeters,
+    );
+    const phrase = spokenTurnCue(due, along.alongMeters, following);
     if (cuesOn) playTurnCue();
     if (voiceOn) speakWalkCue(phrase);
     setLastCueNote(phrase);
-  }, [walking, cuesOn, voiceOn, nextTurn, thenTurn, along.alongMeters]);
+  }, [walking, cuesOn, voiceOn, along.alongMeters, routePlan.turns]);
 
   useEffect(() => {
     if (!walking || !gpsEnabled || distanceToRouteMeters == null) return;
@@ -362,7 +372,7 @@ export function WalkHud({
   function handleStart() {
     if (elapsedSeconds === 0) {
       lastRoleRef.current = null;
-      lastSpokenTurnRef.current = null;
+      lastSpokenTurnRef.current = new Set();
       lastOffPathRef.current = null;
       reportedFinishRef.current = false;
       setFinished(false);
@@ -398,7 +408,7 @@ export function WalkHud({
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
     lastRoleRef.current = null;
-    lastSpokenTurnRef.current = null;
+    lastSpokenTurnRef.current = new Set();
     lastOffPathRef.current = null;
     reportedFinishRef.current = false;
     setFinished(false);
@@ -573,6 +583,15 @@ export function WalkHud({
           <span>Elapsed</span>
           <strong>{formatDuration(elapsedSeconds)}</strong>
         </div>
+        {progress.block ? (
+          <div>
+            <span>Target pace</span>
+            <strong>
+              {progress.block.avgSpeedMps.toFixed(2)} m/s ·{" "}
+              {formatPaceMinPerKm(progress.block.avgSpeedMps)}
+            </strong>
+          </div>
+        ) : null}
       </div>
 
       {lastCueNote ? (

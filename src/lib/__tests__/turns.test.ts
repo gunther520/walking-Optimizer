@@ -4,10 +4,12 @@ import { buildSegments } from "@/lib/route-math";
 import {
   instructionTexts,
   isSilentTurn,
+  nextTurnDueForCue,
   nextTurnGuidance,
   offsetTurns,
   parseGraphHopperTurns,
   shouldAnnounceTurn,
+  shouldCueTurn,
   spokenRoleText,
   spokenThenTurnText,
   spokenTurnCue,
@@ -180,5 +182,17 @@ describe("spoken turns", () => {
     expect(spokenTurnCue(left, 80, { ...left, text: "Turn right onto Pine Street" })).toBe(
       "In 40 meters, turn left onto Oak Street. Then turn right onto Pine Street",
     );
+  });
+
+  it("cues a turn after a GPS jump that skipped the 45 m window", () => {
+    expect(shouldAnnounceTurn(left, 20)).toBe(false);
+    expect(shouldCueTurn(left, 20)).toBe(false);
+    expect(shouldAnnounceTurn(left, 130)).toBe(false);
+    expect(shouldCueTurn(left, 130)).toBe(true);
+    expect(shouldCueTurn(left, 250)).toBe(false);
+
+    const due = nextTurnDueForCue([left], 130, []);
+    expect(due?.text).toBe(left.text);
+    expect(nextTurnDueForCue([left], 130, [left.alongMeters])).toBeNull();
   });
 });

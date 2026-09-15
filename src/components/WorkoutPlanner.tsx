@@ -53,7 +53,7 @@ import {
   type WalkFinishRecord,
   type WalkFinishStats,
 } from "@/lib/walk-log";
-import { formatDistance, formatDuration, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
+import { formatDistance, formatDuration, formatPaceMinPerKm, getNearestSegmentMatch, haversineDistance } from "@/lib/route-math";
 import {
   applySnappedViaLocations,
   buildPathHandles,
@@ -237,6 +237,16 @@ export function WorkoutPlanner() {
   return <WorkoutPlannerClient />;
 }
 
+function subscribeWideLayout(onChange: () => void) {
+  const media = window.matchMedia("(min-width: 1181px)");
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
+}
+
+function getWideLayout() {
+  return window.matchMedia("(min-width: 1181px)").matches;
+}
+
 function WorkoutPlannerClient() {
   const initial = useMemo(() => createInitialFromStorage(), []);
   const [form, setForm] = useState(initial.form);
@@ -245,6 +255,7 @@ function WorkoutPlannerClient() {
   const [routePlan, setRoutePlan] = useState<RoutePlan | null>(initial.routePlan);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gpsNote, setGpsNote] = useState<string | null>(null);
   const [currentPosition, setCurrentPosition] = useState<LatLng | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
   const [gpsConsent, setGpsConsent] = useState(initial.gpsConsent);
@@ -270,6 +281,17 @@ function WorkoutPlannerClient() {
   const [navDarkMap, setNavDarkMap] = useState(true);
   const [headingUpOn, setHeadingUpOn] = useState(true);
   const [layoutNonce, setLayoutNonce] = useState(0);
+  const [foldOpen, setFoldOpen] = useState({
+    profile: false,
+    saved: false,
+    finishes: false,
+    help: false,
+  });
+  const wideLayout = useSyncExternalStore(
+    subscribeWideLayout,
+    getWideLayout,
+    () => true,
+  );
   const lastFixRef = useRef<{ point: LatLng; timestamp: number } | null>(null);
   const rebuildTimerRef = useRef<number | null>(null);
   const viaPointsRef = useRef<ViaWaypoint[]>(initial.viaPoints);
@@ -451,6 +473,18 @@ function WorkoutPlannerClient() {
         }
 
         const nearest = getNearestSegmentMatch(nextPoint, routePlan.segments);
+        if (!isOnRoute(nearest.distanceMeters)) {
+          setLiveStats((previousStats) => ({
+            speedMps: speedMps || previousStats?.speedMps || 1.2,
+            estimatedHr: previousStats?.estimatedHr ?? 0,
+            estimatedMets: previousStats?.estimatedMets ?? 0,
+            recommendation: `You are ${formatDistance(nearest.distanceMeters)} off the path. Intervals follow the clock until you rejoin.`,
+            segmentIndex: previousStats?.segmentIndex ?? 0,
+            distanceToRouteMeters: nearest.distanceMeters,
+          }));
+          return;
+        }
+
         const segmentIndex = nearest.segmentIndex;
         const segment = routePlan.segments[segmentIndex];
         const target = routePlan.speedPlan[segmentIndex];
@@ -492,7 +526,7 @@ function WorkoutPlannerClient() {
         });
       },
       (geoError) => {
-        setError(geoError.message || "Geolocation permission was denied.");
+        setGpsNote(geoError.message || "Geolocation permission was denied.");
       },
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 },
     );
@@ -1015,6 +1049,7 @@ function WorkoutPlannerClient() {
     setGpsConsent(true);
     setFollowWalker(true);
     setFollowNonce((nonce) => nonce + 1);
+    setGpsNote(null);
     setError(null);
     setSaveNote(
       "GPS enabled. Recenter follows you on the map; drag the map to look around.",
@@ -1026,6 +1061,7 @@ function WorkoutPlannerClient() {
     setCurrentPosition(null);
     setLiveStats(null);
     setGpsHeadingDeg(null);
+    setGpsNote(null);
     setFollowWalker(false);
     lastFixRef.current = null;
   }
@@ -1098,6 +1134,124 @@ function WorkoutPlannerClient() {
 
       <main className={styles.grid}>
         <aside className={styles.sidebar}>
+          {routePlan ? (
+            <WalkHud
+              routePlan={routePlan}
+              liveSegmentIndex={
+                liveStats && isOnRoute(liveStats.distanceToRouteMeters)
+                  ? liveStats.segmentIndex
+                  : null
+              }
+              onRoute={isOnRoute(liveStats?.distanceToRouteMeters)}
+              currentPosition={currentPosition}
+              onAlongProgress={handleAlongProgress}
+              gpsEnabled={gpsConsent && currentPosition != null}
+              distanceToRouteMeters={liveStats?.distanceToRouteMeters ?? null}
+              weightKg={form.weightKg}
+              finishNote={finishNote}
+              onWalkFinished={handleWalkFinished}
+              onWalkingChange={handleWalkingChange}
+            />
+          ) : null}
+
+          {gpsNote ? (
+            <div className={styles.gpsNote}>
+              <span>{gpsNote}</span>
+              <button
+                type="button"
+                className={styles.savedWalkButton}
+                onClick={() => setGpsNote(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
+
+          {error ? <div className={styles.errorBox}>{error}</div> : null}
+
+          {liveStats ? (
+            <div className={styles.card}>
+              <h2>Live stats</h2>
+              <div className={styles.metricList}>
+                <div>
+                  <span>Current speed</span>
+                  <strong>
+                    {liveStats.speedMps.toFixed(2)} m/s ·{" "}
+                    {formatPaceMinPerKm(liveStats.speedMps)}
+                  </strong>
+                </div>
+                <div>
+                  <span>Estimated HR</span>
+                  <strong>
+                    {liveStats.estimatedHr ? `${liveStats.estimatedHr} bpm` : "—"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Estimated intensity</span>
+                  <strong>
+                    {liveStats.estimatedMets
+                      ? `${liveStats.estimatedMets.toFixed(1)} METs`
+                      : "—"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Current segment</span>
+                  <strong>
+                    {isOnRoute(liveStats.distanceToRouteMeters)
+                      ? `#${liveStats.segmentIndex + 1}`
+                      : "Off path"}
+                  </strong>
+                </div>
+              </div>
+              <p className={styles.recommendation}>{liveStats.recommendation}</p>
+            </div>
+          ) : null}
+
+          <div className={styles.card}>
+            <h2>Live GPS</h2>
+            <p className={styles.cardText}>
+              Location is optional and only used in this browser to match you to the
+              planned path. It is not uploaded to a server or saved beyond this device.
+            </p>
+            {!gpsConsent ? (
+              <button
+                className={styles.primaryButton}
+                type="button"
+                onClick={handleEnableGps}
+                disabled={!routePlan}
+              >
+                Enable live GPS guidance
+              </button>
+            ) : (
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                onClick={handleDisableGps}
+              >
+                Turn off GPS
+              </button>
+            )}
+            <p className={styles.pickHint}>
+              {gpsConsent
+                ? currentPosition
+                  ? `GPS on — the map follows you (Recenter if you pan away). On-path within ${ON_ROUTE_MAX_METERS} m drives intervals; farther uses the clock.`
+                  : "GPS on — waiting for a fix. Recenter will follow you once a position arrives."
+                : "GPS off — walk mode still works on the interval clock (best for PC)."}
+            </p>
+          </div>
+
+          <details
+            className={styles.plannerFold}
+            open={wideLayout || foldOpen.profile}
+            onToggle={(event) => {
+              if (wideLayout) return;
+              setFoldOpen((current) => ({
+                ...current,
+                profile: (event.target as HTMLDetailsElement).open,
+              }));
+            }}
+          >
+            <summary>Profile</summary>
           <div className={styles.card}>
             <h2>Profile</h2>
             <p className={styles.cardText}>
@@ -1346,7 +1500,20 @@ function WorkoutPlannerClient() {
             <p className={styles.pickHint}>{pickHint}</p>
             {saveNote ? <p className={styles.saveNote}>{saveNote}</p> : null}
           </div>
+          </details>
 
+          <details
+            className={styles.plannerFold}
+            open={wideLayout || foldOpen.saved}
+            onToggle={(event) => {
+              if (wideLayout) return;
+              setFoldOpen((current) => ({
+                ...current,
+                saved: (event.target as HTMLDetailsElement).open,
+              }));
+            }}
+          >
+            <summary>Saved walks</summary>
           <div className={styles.card}>
             <h2>Saved walks</h2>
             <p className={styles.cardText}>
@@ -1417,7 +1584,20 @@ function WorkoutPlannerClient() {
               <p className={styles.pickHint}>No saved walks on this device yet.</p>
             )}
           </div>
+          </details>
 
+          <details
+            className={styles.plannerFold}
+            open={wideLayout || foldOpen.finishes}
+            onToggle={(event) => {
+              if (wideLayout) return;
+              setFoldOpen((current) => ({
+                ...current,
+                finishes: (event.target as HTMLDetailsElement).open,
+              }));
+            }}
+          >
+            <summary>Recent finishes</summary>
           <div className={styles.card}>
             <h2>Recent finishes</h2>
             <p className={styles.cardText}>
@@ -1458,40 +1638,20 @@ function WorkoutPlannerClient() {
               </p>
             )}
           </div>
+          </details>
 
-          <div className={styles.card}>
-            <h2>Live GPS</h2>
-            <p className={styles.cardText}>
-              Location is optional and only used in this browser to match you to the
-              planned path. It is not uploaded to a server or saved beyond this device.
-            </p>
-            {!gpsConsent ? (
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={handleEnableGps}
-                disabled={!routePlan}
-              >
-                Enable live GPS guidance
-              </button>
-            ) : (
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={handleDisableGps}
-              >
-                Turn off GPS
-              </button>
-            )}
-            <p className={styles.pickHint}>
-              {gpsConsent
-                ? currentPosition
-                  ? `GPS on — the map follows you (Recenter if you pan away). On-path within ${ON_ROUTE_MAX_METERS} m drives intervals; farther uses the clock.`
-                  : "GPS on — waiting for a fix. Recenter will follow you once a position arrives."
-                : "GPS off — walk mode still works on the interval clock (best for PC)."}
-            </p>
-          </div>
-
+          <details
+            className={styles.plannerFold}
+            open={wideLayout || foldOpen.help}
+            onToggle={(event) => {
+              if (wideLayout) return;
+              setFoldOpen((current) => ({
+                ...current,
+                help: (event.target as HTMLDetailsElement).open,
+              }));
+            }}
+          >
+            <summary>Map steps & markers</summary>
           <div className={styles.card}>
             <h2>Map steps</h2>
             <ol className={styles.steps}>
@@ -1550,49 +1710,7 @@ function WorkoutPlannerClient() {
               </p>
             ) : null}
           </div>
-
-          {liveStats ? (
-            <div className={styles.card}>
-              <h2>Live stats</h2>
-              <div className={styles.metricList}>
-                <div>
-                  <span>Current speed</span>
-                  <strong>{liveStats.speedMps.toFixed(2)} m/s</strong>
-                </div>
-                <div>
-                  <span>Estimated HR</span>
-                  <strong>{liveStats.estimatedHr} bpm</strong>
-                </div>
-                <div>
-                  <span>Estimated intensity</span>
-                  <strong>{liveStats.estimatedMets.toFixed(1)} METs</strong>
-                </div>
-                <div>
-                  <span>Current segment</span>
-                  <strong>#{liveStats.segmentIndex + 1}</strong>
-                </div>
-              </div>
-              <p className={styles.recommendation}>{liveStats.recommendation}</p>
-            </div>
-          ) : null}
-
-          {routePlan ? (
-            <WalkHud
-              routePlan={routePlan}
-              liveSegmentIndex={liveStats?.segmentIndex ?? null}
-              onRoute={isOnRoute(liveStats?.distanceToRouteMeters)}
-              currentPosition={currentPosition}
-              onAlongProgress={handleAlongProgress}
-              gpsEnabled={gpsConsent && currentPosition != null}
-              distanceToRouteMeters={liveStats?.distanceToRouteMeters ?? null}
-              weightKg={form.weightKg}
-              finishNote={finishNote}
-              onWalkFinished={handleWalkFinished}
-              onWalkingChange={handleWalkingChange}
-            />
-          ) : null}
-
-          {error ? <div className={styles.errorBox}>{error}</div> : null}
+          </details>
         </aside>
 
         <section className={styles.mapPanel}>
@@ -1674,7 +1792,7 @@ function WorkoutPlannerClient() {
                   Click the path to dodge a blocked street ({pathHandles.length} handles)
                 </strong>
                 <span>
-                  Orange vias mark detours — drag or double-click to remove.
+                  Orange vias mark detours — drag to move, tap to remove.
                   Ctrl/⌘+Z undoes. Extra vias are chained for GraphHopper free tier.
                   {viaPoints.length ? ` · ${viaPoints.length} via(s)` : ""}
                   {loading ? " · Updating…" : ""}

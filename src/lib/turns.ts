@@ -12,6 +12,8 @@ const VIA_REACHED_SIGN = 5;
 export const TURN_ANNOUNCE_METERS = 45;
 /** Consider a turn passed once the walker is this far beyond it. */
 const TURN_PASSED_METERS = 12;
+/** Still cue a turn if GPS jumped this far past it. */
+export const TURN_CUE_CATCH_METERS = 80;
 
 export type GraphHopperInstruction = {
   text?: string;
@@ -187,6 +189,30 @@ export function shouldAnnounceTurn(
 ) {
   const remaining = turn.alongMeters - alongMeters;
   return remaining >= -8 && remaining <= announceWithin;
+}
+
+/** Approaching window, or a GPS jump that landed just past the maneuver. */
+export function shouldCueTurn(
+  turn: RouteTurn,
+  alongMeters: number,
+  announceWithin = TURN_ANNOUNCE_METERS,
+  catchPastMeters = TURN_CUE_CATCH_METERS,
+) {
+  const remaining = turn.alongMeters - alongMeters;
+  return remaining <= announceWithin && remaining >= -catchPastMeters;
+}
+
+export function nextTurnDueForCue(
+  turns: RouteTurn[],
+  alongMeters: number,
+  announcedAlongMeters: Iterable<number>,
+) {
+  const announced = new Set(announcedAlongMeters);
+  for (const turn of turns) {
+    if (isSilentTurn(turn) || announced.has(turn.alongMeters)) continue;
+    if (shouldCueTurn(turn, alongMeters)) return turn;
+  }
+  return null;
 }
 
 export function spokenTurnText(turn: RouteTurn, alongMeters: number) {

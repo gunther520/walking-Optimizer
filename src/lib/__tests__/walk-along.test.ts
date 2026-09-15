@@ -87,4 +87,25 @@ describe("along-path progress", () => {
     expect(walked.length).toBeGreaterThan(2);
     expect(walked[0]).toEqual(points[0]);
   });
+
+  it("uses GPS along-meters only when onRoute is true", () => {
+    const points = makeLine(600);
+    const segments = buildSegments(points);
+    const plan = buildRoutePlan(points, segments, [], profile, []);
+    const nearEnd = points[points.length - 2];
+
+    const preview = getAlongPathProgress(plan, 0, {
+      onRoute: false,
+      currentPosition: nearEnd,
+    });
+    expect(preview.mode).toBe("clock");
+    expect(preview.alongMeters).toBeCloseTo(0, 5);
+
+    const walking = getAlongPathProgress(plan, 0, {
+      onRoute: true,
+      currentPosition: nearEnd,
+    });
+    expect(walking.mode).toBe("gps");
+    expect(walking.alongMeters).toBeGreaterThan(plan.totalDistanceMeters * 0.7);
+  });
 });

@@ -164,4 +164,19 @@ describe("getWalkProgress", () => {
     expect(mid.mode).toBe("clock");
     expect(mid.remainingSeconds).toBeCloseTo(first.durationSeconds / 2, 0);
   });
+
+  it("uses along-path meters for GPS interval progress", () => {
+    const points = makeLine(1200);
+    const segments = buildSegments(points);
+    const plan = buildRoutePlan(points, segments, [], profile, []);
+    const first = plan.paceBlocks[0];
+    const along = first.distanceMeters * 0.75;
+    const mid = getWalkProgress(plan, 0, 0, {
+      onRoute: true,
+      alongMeters: along,
+    });
+    expect(mid.mode).toBe("gps");
+    expect(mid.blockIndex).toBe(0);
+    expect(mid.remainingSeconds).toBeCloseTo(first.durationSeconds * 0.25, 0);
+  });
 });

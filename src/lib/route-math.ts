@@ -181,6 +181,18 @@ export function formatDistance(distanceMeters: number) {
   return `${Math.round(distanceMeters)} m`;
 }
 
+/** Walking pace as min:sec per kilometer. */
+export function formatPaceMinPerKm(speedMps: number) {
+  if (!Number.isFinite(speedMps) || speedMps <= 0.2) return "—";
+  const secondsPerKm = 1000 / speedMps;
+  const minutes = Math.floor(secondsPerKm / 60);
+  const seconds = Math.round(secondsPerKm % 60);
+  if (seconds === 60) {
+    return `${minutes + 1}:00 /km`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")} /km`;
+}
+
 export function offsetLatLng(
   point: LatLng,
   eastMeters: number,
