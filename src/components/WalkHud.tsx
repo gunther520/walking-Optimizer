@@ -590,6 +590,14 @@ export function WalkHud({
         <p className={styles.walkHudHint}>
           {role ? paceRoleHint(role) : "Start walk to begin interval cues."}
         </p>
+        {nextTurn && !finished ? (
+          <p className={styles.walkNextTurn}>
+            Next turn in {formatDistance(metersToTurn ?? 0)}: {nextTurn.text}
+            {thenTurn ? ` · Then ${thenTurn.text}` : ""}
+          </p>
+        ) : !finished && (walking || elapsedSeconds > 0) ? (
+          <p className={styles.walkNextTurn}>No further turns — continue to the finish.</p>
+        ) : null}
         <div className={styles.walkProgress}>
           <div
             className={styles.walkProgressFill}
@@ -610,14 +618,6 @@ export function WalkHud({
             {" / plan "}
             {formatDuration(Math.round(splitNow.plannedSeconds))}
           </p>
-        ) : null}
-        {nextTurn && !finished ? (
-          <p className={styles.walkNextTurn}>
-            Next turn in {formatDistance(metersToTurn ?? 0)}: {nextTurn.text}
-            {thenTurn ? ` · Then ${thenTurn.text}` : ""}
-          </p>
-        ) : walking ? (
-          <p className={styles.walkNextTurn}>No further turns — continue to the finish.</p>
         ) : null}
         {finished ? (
           <div className={styles.walkFinish}>

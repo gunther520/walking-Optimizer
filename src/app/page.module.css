@@ -455,6 +455,21 @@
   pointer-events: auto;
 }
 
+.mapNavPrimaryBar {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 520;
+  display: flex;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.mapNavPrimaryBar button {
+  pointer-events: auto;
+}
+
 .placeSearchList {
   list-style: none;
   display: flex;
@@ -899,18 +914,24 @@
 
 .pageNav .mapNavBar {
   top: max(14px, env(safe-area-inset-top, 0px));
+  left: max(54px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  gap: 8px;
+}
+
+.pageNav .mapNavPrimaryBar {
   left: max(12px, env(safe-area-inset-left, 0px));
   right: max(12px, env(safe-area-inset-right, 0px));
-  gap: 10px;
+  bottom: max(88px, calc(env(safe-area-inset-bottom, 0px) + 72px));
 }
 
 .pageNav .walkHud {
   position: fixed;
-  top: calc(70px + env(safe-area-inset-top, 0px));
+  top: calc(58px + env(safe-area-inset-top, 0px));
   right: max(12px, env(safe-area-inset-right, 0px));
   left: max(12px, env(safe-area-inset-left, 0px));
   z-index: 700;
-  max-height: 42dvh;
+  max-height: 38dvh;
   overflow: auto;
   background: rgba(16, 33, 58, 0.92);
   color: #fff;

@@ -1922,6 +1922,24 @@ function WorkoutPlannerClient() {
                 </button>
                 <button
                   type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={() => setNavDarkMap((value) => !value)}
+                >
+                  {navDarkMap ? "Light map" : "Dark map"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.mapOverlayButton}
+                  onClick={() => setHeadingUpOn((value) => !value)}
+                >
+                  {headingUpOn ? "North up" : "Heading up"}
+                </button>
+              </div>
+            ) : null}
+            {routePlan && navMode ? (
+              <div className={styles.mapNavPrimaryBar}>
+                <button
+                  type="button"
                   className={`${styles.mapOverlayButton} ${styles.mapNavControl}`}
                   onClick={handleNavPauseOrResume}
                 >
@@ -1938,20 +1956,6 @@ function WorkoutPlannerClient() {
                   disabled={!currentPosition}
                 >
                   {followWalker && currentPosition ? "Following" : "Recenter"}
-                </button>
-                <button
-                  type="button"
-                  className={styles.mapOverlayButton}
-                  onClick={() => setNavDarkMap((value) => !value)}
-                >
-                  {navDarkMap ? "Light map" : "Dark map"}
-                </button>
-                <button
-                  type="button"
-                  className={styles.mapOverlayButton}
-                  onClick={() => setHeadingUpOn((value) => !value)}
-                >
-                  {headingUpOn ? "North up" : "Heading up"}
                 </button>
               </div>
             ) : null}
