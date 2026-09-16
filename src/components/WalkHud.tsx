@@ -25,6 +25,10 @@ import {
   type AlongPathProgress,
 } from "@/lib/walk-along";
 import { isOnRoute, offPathMessage } from "@/lib/walk-follow";
+import {
+  walkRouteId,
+  type StoredWalkSession,
+} from "@/lib/planner-storage";
 import { formatPlanDelta, type WalkFinishStats } from "@/lib/walk-log";
 import {
   buildSplitMarkers,
@@ -52,6 +56,9 @@ type WalkHudProps = {
   finishNote?: string | null;
   onWalkFinished?: (stats: WalkFinishStats) => void;
   onWalkingChange?: (walking: boolean) => void;
+  initialWalkSession?: StoredWalkSession | null;
+  onWalkSessionChange?: (session: StoredWalkSession | null) => void;
+  remoteWalkAction?: { nonce: number; action: "pause" | "resume" } | null;
 };
 
 const DEMO_SPEED = 10;
@@ -86,35 +93,63 @@ export function WalkHud({
   finishNote = null,
   onWalkFinished,
   onWalkingChange,
+  initialWalkSession = null,
+  onWalkSessionChange,
+  remoteWalkAction = null,
 }: WalkHudProps) {
+  const routeId = walkRouteId(routePlan);
+  const restoredSession =
+    initialWalkSession && initialWalkSession.routeId === routeId
+      ? initialWalkSession
+      : null;
   const [walking, setWalking] = useState(false);
   const [cuesOn, setCuesOn] = useState(true);
   const [voiceOn, setVoiceOn] = useState(readVoicePref);
   const [demoFast, setDemoFast] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [lastCueNote, setLastCueNote] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(
+    restoredSession?.elapsedSeconds ?? 0,
+  );
+  const [restoredElapsedSeconds, setRestoredElapsedSeconds] = useState(
+    restoredSession?.elapsedSeconds ?? 0,
+  );
+  const [restoredAlongMeters, setRestoredAlongMeters] = useState(
+    restoredSession?.alongMeters ?? 0,
+  );
+  const [lastCueNote, setLastCueNote] = useState<string | null>(
+    restoredSession && restoredSession.elapsedSeconds > 0
+      ? "Walk restored on this device — tap Resume."
+      : null,
+  );
   const [finished, setFinished] = useState(false);
   const [crossings, setCrossings] = useState<SplitCrossing[]>([]);
-  const pausedElapsedRef = useRef(0);
+  const pausedElapsedRef = useRef(restoredSession?.elapsedSeconds ?? 0);
   const walkingSinceRef = useRef<number | null>(null);
   const lastRoleRef = useRef<string | null>(null);
   const lastSpokenTurnRef = useRef<Set<number>>(new Set());
   const lastOffPathRef = useRef<boolean | null>(null);
   const reportedFinishRef = useRef(false);
+  const lastRemoteNonceRef = useRef<number | null>(null);
   const onWalkFinishedRef = useRef(onWalkFinished);
   const onWalkingChangeRef = useRef(onWalkingChange);
-  const routeId = `${routePlan.segments.length}-${Math.round(routePlan.totalDistanceMeters)}`;
+  const onWalkSessionChangeRef = useRef(onWalkSessionChange);
+  const seenRouteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     onWalkFinishedRef.current = onWalkFinished;
     onWalkingChangeRef.current = onWalkingChange;
-  }, [onWalkFinished, onWalkingChange]);
+    onWalkSessionChangeRef.current = onWalkSessionChange;
+  }, [onWalkFinished, onWalkingChange, onWalkSessionChange]);
 
   useEffect(() => {
+    const previousId = seenRouteIdRef.current;
+    seenRouteIdRef.current = routeId;
+    if (previousId === null || previousId === routeId) return;
     setWalking(false);
     pausedElapsedRef.current = 0;
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
+    setRestoredElapsedSeconds(0);
+    setRestoredAlongMeters(0);
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = new Set();
     lastOffPathRef.current = null;
@@ -123,6 +158,7 @@ export function WalkHud({
     setCrossings([]);
     setLastCueNote(null);
     stopWalkSpeech();
+    onWalkSessionChangeRef.current?.(null);
   }, [routeId]);
 
   useEffect(() => {
@@ -157,8 +193,18 @@ export function WalkHud({
       getAlongPathProgress(routePlan, elapsedSeconds, {
         onRoute: walking && onRoute,
         currentPosition,
+        restoredElapsedSeconds,
+        restoredAlongMeters,
       }),
-    [routePlan, elapsedSeconds, onRoute, currentPosition, walking],
+    [
+      routePlan,
+      elapsedSeconds,
+      onRoute,
+      currentPosition,
+      walking,
+      restoredElapsedSeconds,
+      restoredAlongMeters,
+    ],
   );
   const progress = getWalkProgress(
     routePlan,
@@ -218,6 +264,38 @@ export function WalkHud({
   useEffect(() => {
     onWalkingChangeRef.current?.(walking);
   }, [walking]);
+
+  useEffect(() => {
+    if (finished || (!walking && elapsedSeconds <= 0)) {
+      onWalkSessionChangeRef.current?.(null);
+      return;
+    }
+    onWalkSessionChangeRef.current?.({
+      walking,
+      elapsedSeconds,
+      alongMeters: along.alongMeters,
+      routeId,
+    });
+  }, [walking, elapsedSeconds, along.alongMeters, routeId, finished]);
+
+  useEffect(() => {
+    const remote = remoteWalkAction;
+    if (!remote) return;
+    if (lastRemoteNonceRef.current == null) {
+      lastRemoteNonceRef.current = remote.nonce;
+      return;
+    }
+    if (remote.nonce === lastRemoteNonceRef.current) return;
+    lastRemoteNonceRef.current = remote.nonce;
+    if (remote.action === "pause") {
+      setWalking(false);
+      stopWalkSpeech();
+      return;
+    }
+    if (remote.action === "resume" && !finished) {
+      setWalking(true);
+    }
+  }, [remoteWalkAction, finished]);
 
   useEffect(() => {
     return () => onWalkingChangeRef.current?.(false);
@@ -381,6 +459,8 @@ export function WalkHud({
       reportedFinishRef.current = false;
       setFinished(false);
       setCrossings([]);
+      setRestoredElapsedSeconds(0);
+      setRestoredAlongMeters(0);
     }
     setWalking(true);
     if (progress.block && lastRoleRef.current == null) {
@@ -411,6 +491,8 @@ export function WalkHud({
     pausedElapsedRef.current = 0;
     walkingSinceRef.current = null;
     setElapsedSeconds(0);
+    setRestoredElapsedSeconds(0);
+    setRestoredAlongMeters(0);
     lastRoleRef.current = null;
     lastSpokenTurnRef.current = new Set();
     lastOffPathRef.current = null;
@@ -419,6 +501,7 @@ export function WalkHud({
     setCrossings([]);
     setLastCueNote(null);
     stopWalkSpeech();
+    onWalkSessionChangeRef.current?.(null);
   }
 
   function handleTestCue(nextRole: PaceRole = "push") {
@@ -480,7 +563,9 @@ export function WalkHud({
             ? "Tracking GPS on the route — intervals follow your position."
             : demoFast
               ? "Clock mode ×10 (PC demo) — role changes ~every 18s / 6s."
-              : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
+              : elapsedSeconds > 0 && !walking && !finished
+                ? "Walk restored or paused — tap Resume to continue the timer."
+                : "Clock mode — on PC, intervals advance by time (~180s push, then ~60s recovery). Beep and voice fire when the role changes."}
         {walking
           ? " Screen stays on while you walk, if this browser allows it."
           : ""}

@@ -6,6 +6,7 @@ import { buildSegments } from "@/lib/route-math";
 import {
   alongMetersAtElapsed,
   alongMetersAtPosition,
+  alongMetersFromRestoredClock,
   getAlongPathProgress,
   walkedPathPoints,
 } from "@/lib/walk-along";
@@ -107,5 +108,29 @@ describe("along-path progress", () => {
     });
     expect(walking.mode).toBe("gps");
     expect(walking.alongMeters).toBeGreaterThan(plan.totalDistanceMeters * 0.7);
+  });
+
+  it("continues clock progress from a restored along-meters after reload", () => {
+    const points = makeLine(800);
+    const segments = buildSegments(points);
+    const plan = buildRoutePlan(points, segments, [], profile, []);
+    const restoredElapsed = 90;
+    const restoredAlong = alongMetersAtElapsed(plan, restoredElapsed) + 80;
+    const later = getAlongPathProgress(plan, restoredElapsed + 30, {
+      restoredElapsedSeconds: restoredElapsed,
+      restoredAlongMeters: restoredAlong,
+    });
+
+    expect(later.mode).toBe("clock");
+    expect(later.alongMeters).toBeGreaterThan(restoredAlong);
+    expect(later.alongMeters).toBeCloseTo(
+      alongMetersFromRestoredClock(
+        plan,
+        restoredElapsed + 30,
+        restoredElapsed,
+        restoredAlong,
+      ),
+      5,
+    );
   });
 });

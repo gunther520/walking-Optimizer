@@ -389,6 +389,15 @@
   cursor: not-allowed;
 }
 
+.mapNavControl {
+  height: 48px;
+  min-width: 118px;
+  padding: 0 16px;
+  font-size: 15px;
+  border-radius: 14px;
+  flex: 1 1 42%;
+}
+
 .mapTurnBanner {
   position: absolute;
   right: 14px;
@@ -892,11 +901,12 @@
   top: max(14px, env(safe-area-inset-top, 0px));
   left: max(12px, env(safe-area-inset-left, 0px));
   right: max(12px, env(safe-area-inset-right, 0px));
+  gap: 10px;
 }
 
 .pageNav .walkHud {
   position: fixed;
-  top: calc(58px + env(safe-area-inset-top, 0px));
+  top: calc(70px + env(safe-area-inset-top, 0px));
   right: max(12px, env(safe-area-inset-right, 0px));
   left: max(12px, env(safe-area-inset-left, 0px));
   z-index: 700;
@@ -925,9 +935,17 @@
 .pageNav .cueToggle,
 .pageNav .walkProgressLabel,
 .pageNav .walkSplitLine,
-.pageNav .walkNextTurn,
 .pageNav .walkHudMeta span {
   color: #dbe7ff;
+}
+
+.pageNav .walkNextTurn {
+  display: block;
+  margin-top: 10px;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .pageNav .walkHudRole {
@@ -936,6 +954,17 @@
 
 .pageNav .walkHudCountdown {
   font-size: 26px;
+}
+
+.pageNav .walkHudActions {
+  margin-top: 12px;
+  gap: 12px;
+}
+
+.pageNav .walkHudActions .primaryButton,
+.pageNav .walkHudActions .secondaryButton {
+  height: 48px;
+  font-size: 16px;
 }
 
 .pageNav .walkProgress {

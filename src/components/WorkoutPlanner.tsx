@@ -11,8 +11,10 @@ import { buildElevationProfile } from "@/lib/elevation-profile";
 import {
   applyShareToHistory,
   buildShareSearch,
+  canUseWebShare,
   headingPointFromShare,
   parseShareSearch,
+  shareOrCopyWalkUrl,
   shareUrlFromState,
 } from "@/lib/share-url";
 import { isSilentTurn, nextTurnGuidance } from "@/lib/turns";
@@ -34,6 +36,7 @@ import {
   clearPlannerState,
   loadPlannerState,
   savePlannerState,
+  type StoredWalkSession,
 } from "@/lib/planner-storage";
 import {
   defaultSavedWalkName,
@@ -170,7 +173,11 @@ function createInitialFromStorage() {
         pickingEnabled: !(stored.routePlan && stored.mapLocked === true),
         gpsConsent: Boolean(stored.gpsConsent),
         viaPoints: normalizeViaPoints(stored.viaPoints ?? []),
-        saveNote: `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
+        walkSession: stored.walkSession ?? null,
+        saveNote:
+          stored.walkSession && stored.walkSession.elapsedSeconds > 0
+            ? "Walk restored — tap Resume. Timer and pause were saved on this device."
+            : `Restored session from ${new Date(stored.savedAt).toLocaleString()}`,
       }
     : {
         form: DEFAULT_FORM,
@@ -181,6 +188,7 @@ function createInitialFromStorage() {
         pickingEnabled: true,
         gpsConsent: false,
         viaPoints: [] as ViaWaypoint[],
+        walkSession: null as StoredWalkSession | null,
         saveNote: null as string | null,
       };
 
@@ -208,8 +216,9 @@ function createInitialFromStorage() {
         sequence: index,
       })),
     ),
+    walkSession: null as StoredWalkSession | null,
     saveNote:
-      "Opened a shared walk. Build the route when you are ready (uses GraphHopper credits).",
+      "Opened a shared walk. Build the route when you are ready (uses GraphHopper credits). Load saved walk does not need Build.",
   };
 }
 
@@ -280,7 +289,14 @@ function WorkoutPlannerClient() {
   const [navMode, setNavMode] = useState(false);
   const [walking, setWalking] = useState(false);
   const [navDarkMap, setNavDarkMap] = useState(true);
-  const [headingUpOn, setHeadingUpOn] = useState(true);
+  const [headingUpOn, setHeadingUpOn] = useState(false);
+  const [walkSession, setWalkSession] = useState<StoredWalkSession | null>(
+    initial.walkSession,
+  );
+  const [remoteWalkAction, setRemoteWalkAction] = useState<{
+    nonce: number;
+    action: "pause" | "resume";
+  } | null>(null);
   const [layoutNonce, setLayoutNonce] = useState(0);
   const [foldOpen, setFoldOpen] = useState({
     profile: false,
@@ -396,8 +412,9 @@ function WorkoutPlannerClient() {
       mapLocked: !pickingEnabled && Boolean(routePlan),
       gpsConsent,
       viaPoints,
+      walkSession,
     });
-  }, [form, start, end, routePlan, pickingEnabled, gpsConsent, viaPoints]);
+  }, [form, start, end, routePlan, pickingEnabled, gpsConsent, viaPoints, walkSession]);
 
   useEffect(() => {
     const headingDeg =
@@ -618,6 +635,7 @@ function WorkoutPlannerClient() {
     setGpsHeadingDeg(null);
     setFollowWalker(false);
     clearPlannerState();
+    setWalkSession(null);
     setSaveName("");
     setSaveNote("Cleared local session.");
   }
@@ -914,9 +932,9 @@ function WorkoutPlannerClient() {
     setSaveNote("Downloaded GPX for this walking route.");
   }
 
-  async function handleCopyLink() {
+  async function handleShareLink() {
     if (!start) {
-      setSaveNote("Set a start point before copying a share link.");
+      setSaveNote("Set a start point before sharing a link.");
       return;
     }
     const headingDeg =
@@ -937,13 +955,16 @@ function WorkoutPlannerClient() {
       shareInput,
     );
     try {
-      await navigator.clipboard.writeText(url);
+      const result = await shareOrCopyWalkUrl(url);
+      if (result === "cancelled") return;
       applyShareToHistory(buildShareSearch(shareInput));
       setSaveNote(
-        "Link copied. It opens this start, end, and vias — they still need to Build (GraphHopper credits).",
+        result === "shared"
+          ? "Shared. The link still needs Build; Load saved walk does not."
+          : "Link copied. It opens this start, end, and vias — they still need to Build (GraphHopper credits). Load saved walk does not.",
       );
     } catch {
-      setError("Could not copy the link. Copy the address bar instead.");
+      setError("Could not share the link. Copy the address bar instead.");
     }
   }
 
@@ -1003,6 +1024,7 @@ function WorkoutPlannerClient() {
     setFitNonce((nonce) => nonce + 1);
     setAlongProgress(null);
     setLiveStats(null);
+    setWalkSession(null);
     setError(null);
     setSaveName(walk.name);
     setSaveNote(
@@ -1036,6 +1058,7 @@ function WorkoutPlannerClient() {
     setWalkLogs(logs);
     const vsPrevious = compareToPrevious(result.record, logs);
     setFinishNote(vsPrevious);
+    setWalkSession(null);
     setSaveNote(
       `Logged this finish${vsPrevious ? ` — ${vsPrevious}` : ""}. Recent finishes stay on this device.`,
     );
@@ -1100,6 +1123,30 @@ function WorkoutPlannerClient() {
     if (nextWalking) enterNavMode();
   }
 
+  function handleWalkSessionChange(session: StoredWalkSession | null) {
+    setWalkSession((current) => {
+      if (current == null && session == null) return current;
+      if (
+        current &&
+        session &&
+        current.walking === session.walking &&
+        current.elapsedSeconds === session.elapsedSeconds &&
+        current.alongMeters === session.alongMeters &&
+        current.routeId === session.routeId
+      ) {
+        return current;
+      }
+      return session;
+    });
+  }
+
+  function handleNavPauseOrResume() {
+    setRemoteWalkAction((current) => ({
+      nonce: (current?.nonce ?? 0) + 1,
+      action: walking ? "pause" : "resume",
+    }));
+  }
+
   function handleSearchStart(hit: GeocodeHit) {
     setStart(hit.location);
     setPickingEnabled(true);
@@ -1155,6 +1202,9 @@ function WorkoutPlannerClient() {
               finishNote={finishNote}
               onWalkFinished={handleWalkFinished}
               onWalkingChange={handleWalkingChange}
+              initialWalkSession={walkSession}
+              onWalkSessionChange={handleWalkSessionChange}
+              remoteWalkAction={remoteWalkAction}
             />
           ) : null}
 
@@ -1172,6 +1222,51 @@ function WorkoutPlannerClient() {
           ) : null}
 
           {error ? <div className={styles.errorBox}>{error}</div> : null}
+
+          <div className={styles.card}>
+            <h2>Plan this walk</h2>
+            <p className={styles.cardText}>
+              Search a park or station, then Build. Profile (age, HR, max speed)
+              stays folded away until you need it.
+            </p>
+            <PlaceSearch
+              near={start}
+              disabled={loading}
+              onSetStart={handleSearchStart}
+              onSetEnd={handleSearchEnd}
+            />
+            <button
+              className={styles.primaryButton}
+              onClick={handleBuildRoute}
+              disabled={loading}
+            >
+              {loading
+                ? "Building route..."
+                : form.walkShape === "loop"
+                  ? "Build timed loop"
+                  : form.walkShape === "out_and_back"
+                    ? "Build out-and-back"
+                    : "Build aerobic walking plan"}
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleUseMyLocation}
+              disabled={loading}
+              type="button"
+            >
+              Start from my location
+            </button>
+            <button
+              className={styles.secondaryButton}
+              onClick={handleShareLink}
+              disabled={!start}
+              type="button"
+            >
+              {canUseWebShare() ? "Share walk" : "Copy share link"}
+            </button>
+            <p className={styles.pickHint}>{pickHint}</p>
+            {saveNote ? <p className={styles.saveNote}>{saveNote}</p> : null}
+          </div>
 
           {liveStats ? (
             <div className={styles.card}>
@@ -1261,13 +1356,6 @@ function WorkoutPlannerClient() {
             <p className={styles.cardText}>
               {getWorkoutCopy(form.workoutLevel)} with a live speed target tuned to route slope.
             </p>
-
-            <PlaceSearch
-              near={start}
-              disabled={loading}
-              onSetStart={handleSearchStart}
-              onSetEnd={handleSearchEnd}
-            />
 
             <label className={styles.field}>
               <span>Workout level</span>
@@ -1434,15 +1522,6 @@ function WorkoutPlannerClient() {
               changing this.
             </p>
 
-            <button className={styles.primaryButton} onClick={handleBuildRoute} disabled={loading}>
-              {loading
-                ? "Building route..."
-                : form.walkShape === "loop"
-                  ? "Build timed loop"
-                  : form.walkShape === "out_and_back"
-                    ? "Build out-and-back"
-                    : "Build aerobic walking plan"}
-            </button>
             {form.walkShape === "loop" ? (
               <button
                 className={styles.secondaryButton}
@@ -1455,27 +1534,11 @@ function WorkoutPlannerClient() {
             ) : null}
             <button
               className={styles.secondaryButton}
-              onClick={handleUseMyLocation}
-              disabled={loading}
-              type="button"
-            >
-              Start from my location
-            </button>
-            <button
-              className={styles.secondaryButton}
               onClick={handleExportGpx}
               disabled={!routePlan}
               type="button"
             >
               Download GPX
-            </button>
-            <button
-              className={styles.secondaryButton}
-              onClick={handleCopyLink}
-              disabled={!start}
-              type="button"
-            >
-              Copy share link
             </button>
             <button
               className={styles.secondaryButton}
@@ -1501,8 +1564,6 @@ function WorkoutPlannerClient() {
             >
               Clear points & route
             </button>
-            <p className={styles.pickHint}>{pickHint}</p>
-            {saveNote ? <p className={styles.saveNote}>{saveNote}</p> : null}
           </div>
           </details>
 
@@ -1659,13 +1720,14 @@ function WorkoutPlannerClient() {
           <div className={styles.card}>
             <h2>Map steps</h2>
             <ol className={styles.steps}>
-              <li>Choose point-to-point, a timed loop, or a timed out-and-back.</li>
+              <li>Find a park or station, then Build — search stays visible without opening Profile.</li>
+              <li>Choose point-to-point, a timed loop, or a timed out-and-back in Profile if you need a different shape.</li>
               <li>Click start (and end or “this way” as needed), or use your location.</li>
               <li>Choose path preference (fastest / avoid stairs / flatter).</li>
               <li>Build the route — the map stays interactive. Shuffle a loop to try another tour.</li>
               <li>Download GPX to walk it in another app or watch.</li>
               <li>Save the walk on this device to reopen it later without GraphHopper credits.</li>
-              <li>Copy a share link for start/end/vias — the other person still needs to Build.</li>
+              <li>Share a link for start/end/vias — the other person still needs to Build. Load saved walk does not.</li>
               <li>Click the colored path (or drag a blue square) to dodge a blocked street.</li>
               <li>Undo via edits with Ctrl/⌘+Z. Drag an orange via if the detour is the wrong side.</li>
               <li>Press “Change start & end” if you need new endpoints.</li>
@@ -1860,7 +1922,18 @@ function WorkoutPlannerClient() {
                 </button>
                 <button
                   type="button"
-                  className={styles.mapOverlayButton}
+                  className={`${styles.mapOverlayButton} ${styles.mapNavControl}`}
+                  onClick={handleNavPauseOrResume}
+                >
+                  {walking
+                    ? "Pause"
+                    : (walkSession?.elapsedSeconds ?? 0) > 0
+                      ? "Resume"
+                      : "Start walk"}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.mapOverlayButton} ${styles.mapNavControl}`}
                   onClick={handleRecenter}
                   disabled={!currentPosition}
                 >

@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildShareSearch,
   headingPointFromShare,
   parseShareSearch,
+  shareOrCopyWalkUrl,
   shareUrlFromState,
 } from "@/lib/share-url";
 import { headingDegrees } from "@/lib/time-budget";
@@ -101,5 +102,46 @@ describe("share walk URL", () => {
         routePreference: "default",
       }),
     ).toBe("");
+  });
+});
+
+describe("share or copy walk URL", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the Web Share sheet when navigator.share exists", async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", {
+      share,
+      clipboard: { writeText: vi.fn() },
+    });
+    await expect(shareOrCopyWalkUrl("https://example.com/?s=1,2")).resolves.toBe(
+      "shared",
+    );
+    expect(share).toHaveBeenCalled();
+  });
+
+  it("treats a dismissed share sheet as cancelled", async () => {
+    const error = new Error("Share canceled");
+    error.name = "AbortError";
+    vi.stubGlobal("navigator", {
+      share: vi.fn().mockRejectedValue(error),
+      clipboard: { writeText: vi.fn() },
+    });
+    await expect(shareOrCopyWalkUrl("https://example.com/?s=1,2")).resolves.toBe(
+      "cancelled",
+    );
+  });
+
+  it("falls back to the clipboard when Web Share is missing", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", {
+      clipboard: { writeText },
+    });
+    await expect(shareOrCopyWalkUrl("https://example.com/?s=1,2")).resolves.toBe(
+      "copied",
+    );
+    expect(writeText).toHaveBeenCalledWith("https://example.com/?s=1,2");
   });
 });

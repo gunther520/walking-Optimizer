@@ -79,21 +79,45 @@ export function alongMetersAtPosition(plan: RoutePlan, position: LatLng) {
   );
 }
 
+/** Continue clock progress from a restored GPS/clock position after reload. */
+export function alongMetersFromRestoredClock(
+  plan: RoutePlan,
+  elapsedSeconds: number,
+  restoredElapsedSeconds: number,
+  restoredAlongMeters: number,
+) {
+  const extra =
+    alongMetersAtElapsed(plan, elapsedSeconds) -
+    alongMetersAtElapsed(plan, restoredElapsedSeconds);
+  return Math.max(0, restoredAlongMeters + extra);
+}
+
 export function getAlongPathProgress(
   plan: RoutePlan,
   elapsedSeconds: number,
   options?: {
     onRoute?: boolean;
     currentPosition?: LatLng | null;
+    restoredElapsedSeconds?: number;
+    restoredAlongMeters?: number;
   },
 ): AlongPathProgress {
   const { totalMeters } = buildCumulativeDistances(plan.segments);
   const useGps =
     options?.onRoute === true && options.currentPosition != null;
 
+  const restoredElapsed = options?.restoredElapsedSeconds ?? 0;
+  const restoredAlong = options?.restoredAlongMeters ?? 0;
   const alongMeters = useGps
     ? alongMetersAtPosition(plan, options.currentPosition as LatLng)
-    : alongMetersAtElapsed(plan, elapsedSeconds);
+    : restoredAlong > 0 || restoredElapsed > 0
+      ? alongMetersFromRestoredClock(
+          plan,
+          elapsedSeconds,
+          restoredElapsed,
+          restoredAlong,
+        )
+      : alongMetersAtElapsed(plan, elapsedSeconds);
 
   const clamped = Math.min(totalMeters, Math.max(0, alongMeters));
   const hit = pointAtDistanceAlongRoute(plan.segments, clamped);

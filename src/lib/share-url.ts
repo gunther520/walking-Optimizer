@@ -163,6 +163,34 @@ export function shareUrlFromState(
   return `${origin}${pathname}${search ? `?${search}` : ""}`;
 }
 
+export type ShareLinkResult = "shared" | "copied" | "cancelled";
+
+const SHARE_TEXT =
+  "Walking plan (start, end, vias). The link still needs Build; Load saved walk does not.";
+
+export function canUseWebShare() {
+  return typeof navigator !== "undefined" && typeof navigator.share === "function";
+}
+
+export async function shareOrCopyWalkUrl(url: string): Promise<ShareLinkResult> {
+  if (canUseWebShare()) {
+    try {
+      await navigator.share({
+        title: "Walking optimizer",
+        text: SHARE_TEXT,
+        url,
+      });
+      return "shared";
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "AbortError") return "cancelled";
+    }
+  }
+
+  await navigator.clipboard.writeText(url);
+  return "copied";
+}
+
 export function applyShareToHistory(search: string) {
   if (typeof window === "undefined") return;
   const next = search

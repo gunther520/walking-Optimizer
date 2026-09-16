@@ -683,9 +683,9 @@ export function LeafletMap({
     <MapContainer
       center={[22.3193, 114.1694]}
       zoom={13}
-      scrollWheelZoom={!headingUp}
-      dragging={!headingUp}
-      zoomControl={!headingUp}
+      scrollWheelZoom
+      dragging
+      zoomControl
       style={{ height: "100%", width: "100%" }}
       ref={(map) => {
         mapRef.current = map;
