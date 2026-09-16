@@ -220,6 +220,10 @@ export function WalkHud({
   }, [walking]);
 
   useEffect(() => {
+    return () => onWalkingChangeRef.current?.(false);
+  }, []);
+
+  useEffect(() => {
     return () => onAlongProgress?.(null);
   }, [onAlongProgress]);
 
@@ -242,7 +246,7 @@ export function WalkHud({
   }, [walking, cuesOn, voiceOn, role]);
 
   useEffect(() => {
-    if (!walking) return;
+    if (!walking || offPath) return;
     const due = nextTurnDueForCue(
       routePlan.turns ?? [],
       along.alongMeters,
@@ -257,7 +261,7 @@ export function WalkHud({
     if (cuesOn) playTurnCue();
     if (voiceOn) speakWalkCue(phrase);
     setLastCueNote(phrase);
-  }, [walking, cuesOn, voiceOn, along.alongMeters, routePlan.turns]);
+  }, [walking, offPath, cuesOn, voiceOn, along.alongMeters, routePlan.turns]);
 
   useEffect(() => {
     if (!walking || !gpsEnabled || distanceToRouteMeters == null) return;

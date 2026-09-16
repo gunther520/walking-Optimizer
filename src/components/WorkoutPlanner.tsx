@@ -278,6 +278,7 @@ function WorkoutPlannerClient() {
   const [followNonce, setFollowNonce] = useState(0);
   const [gpsHeadingDeg, setGpsHeadingDeg] = useState<number | null>(null);
   const [navMode, setNavMode] = useState(false);
+  const [walking, setWalking] = useState(false);
   const [navDarkMap, setNavDarkMap] = useState(true);
   const [headingUpOn, setHeadingUpOn] = useState(true);
   const [layoutNonce, setLayoutNonce] = useState(0);
@@ -345,9 +346,11 @@ function WorkoutPlannerClient() {
   }, [routePlan, alongProgress?.alongMeters]);
 
   const rejoin = useMemo(() => {
-    if (!routePlan || !gpsConsent || !currentPosition) return null;
+    if ((!walking && !navMode) || !routePlan || !gpsConsent || !currentPosition) {
+      return null;
+    }
     return rejoinPathGuidance(currentPosition, routePlan.segments);
-  }, [routePlan, gpsConsent, currentPosition]);
+  }, [walking, navMode, routePlan, gpsConsent, currentPosition]);
 
   const pathHeadingDeg = useMemo(() => {
     if (!routePlan?.segments.length) return null;
@@ -1092,8 +1095,9 @@ function WorkoutPlannerClient() {
     setLayoutNonce((nonce) => nonce + 1);
   }
 
-  function handleWalkingChange(walking: boolean) {
-    if (walking) enterNavMode();
+  function handleWalkingChange(nextWalking: boolean) {
+    setWalking(nextWalking);
+    if (nextWalking) enterNavMode();
   }
 
   function handleSearchStart(hit: GeocodeHit) {
